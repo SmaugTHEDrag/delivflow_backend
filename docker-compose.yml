@@ -1,0 +1,175 @@
+
+services:
+  # ============================================================
+  # PostgreSQL - DelivFlow Application
+  # ============================================================
+  postgres:
+    image: postgres:17
+    container_name: delivflow-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-delivflow}
+      POSTGRES_USER: ${POSTGRES_USER:-delivflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    ports:
+      - "${POSTGRES_HOST_PORT:-5433}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - delivflow-network
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER:-delivflow} -d ${POSTGRES_DB:-delivflow}
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ============================================================
+  # PostgreSQL - Keycloak
+  # ============================================================
+  keycloak-postgres:
+    image: postgres:17
+    container_name: delivflow-keycloak-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${KEYCLOAK_DB:-keycloak}
+      POSTGRES_USER: ${KEYCLOAK_DB_USER:-keycloak}
+      POSTGRES_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?KEYCLOAK_DB_PASSWORD is required}
+    ports:
+      - "${KEYCLOAK_DB_HOST_PORT:-5434}:5432"
+    volumes:
+      - keycloak_postgres_data:/var/lib/postgresql/data
+    networks:
+      - delivflow-network
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${KEYCLOAK_DB_USER:-keycloak} -d ${KEYCLOAK_DB:-keycloak}
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ============================================================
+  # Redis
+  # ============================================================
+  redis:
+    image: redis:8-alpine
+    container_name: delivflow-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_HOST_PORT:-6379}:6379"
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+    volumes:
+      - redis_data:/data
+    networks:
+      - delivflow-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  # ============================================================
+  # RedisInsight - Development Only
+  # ============================================================
+  redisinsight:
+    image: redis/redisinsight:latest
+    container_name: delivflow-redisinsight
+    restart: unless-stopped
+    ports:
+      - "${REDISINSIGHT_HOST_PORT:-5540}:5540"
+    volumes:
+      - redisinsight_data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - delivflow-network
+    profiles:
+      - dev
+
+  # ============================================================
+  # RabbitMQ - Message Broker
+  # ============================================================
+  rabbitmq:
+    image: rabbitmq:4-management
+    container_name: delivflow-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-delivflow}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?RABBITMQ_DEFAULT_PASS is required}
+    ports:
+      - "${RABBITMQ_HOST_PORT:-5672}:5672"
+      - "${RABBITMQ_MANAGEMENT_HOST_PORT:-15672}:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - delivflow-network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ============================================================
+  # Keycloak - Development
+  # ============================================================
+  keycloak:
+    image: quay.io/keycloak/keycloak:latest
+    container_name: delivflow-keycloak
+    restart: unless-stopped
+    command:
+      - start-dev
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak-postgres:5432/${KEYCLOAK_DB:-keycloak}
+      KC_DB_USERNAME: ${KEYCLOAK_DB_USER:-keycloak}
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?KEYCLOAK_DB_PASSWORD is required}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USERNAME:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD is required}
+    ports:
+      - "${KEYCLOAK_HOST_PORT:-8180}:8080"
+    volumes:
+      - ./themes:/opt/keycloak/themes
+    depends_on:
+      keycloak-postgres:
+        condition: service_healthy
+    networks:
+      - delivflow-network
+
+# ==============================================================
+# Volumes
+# ==============================================================
+volumes:
+  postgres_data:
+    name: delivflow_postgres_data
+
+  keycloak_postgres_data:
+    name: delivflow_keycloak_postgres_data
+
+  redis_data:
+    name: delivflow_redis_data
+
+  redisinsight_data:
+    name: delivflow_redisinsight_data
+
+  rabbitmq_data:
+    name: delivflow_rabbitmq_data
+
+# ==============================================================
+# Network
+# ==============================================================
+networks:
+  delivflow-network:
+    name: delivflow-network
+    driver: bridge
