@@ -25,47 +25,73 @@ spring:
     locations: classpath:db/migration
 
   # ---------------------------------------------------------------------------
-  # Security - Keycloak resource server
+  # Security - OAuth2 / OpenID Connect client (Keycloak realm "delivflow")
   # ---------------------------------------------------------------------------
-  # Spring Security discovers the JWKS endpoint from the issuer and validates
-  # the signature, issuer and expiration of every Bearer token.
+  # Browser-based login uses the OIDC Authorization Code Flow with a server-side
+  # HTTP session. The confidential client secret is never sent to the browser;
+  # it is only used by the backend when exchanging the authorization code.
   security:
     oauth2:
+      client:
+        registration:
+          keycloak:
+            provider: keycloak
+            client-id: delivflow-backend
+            client-secret: ${KEYCLOAK_CLIENT_SECRET:}
+            authorization-grant-type: authorization_code
+            scope:
+              - openid
+              - profile
+              - email
+            # Default redirect URI: http://localhost:8080/login/oauth2/code/keycloak
+
+        provider:
+          keycloak:
+            issuer-uri: ${KEYCLOAK_ISSUER_URI:http://localhost:8180/realms/delivflow}
+
+      # JWT resource server for Bearer-token API clients (existing /api/users API).
+      # Validates the signature, issuer and expiration of incoming Bearer tokens
+      # against the realm's JWKS endpoint.
       resourceserver:
         jwt:
           issuer-uri: ${KEYCLOAK_ISSUER_URI:http://localhost:8180/realms/delivflow}
 
-  # Authentication is fully delegated to Keycloak, so Spring Boot must not
-  # create its default in-memory user (and log a random password).
-  autoconfigure:
-    exclude:
-      - org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration
+  # ---------------------------------------------------------------------------
+  # Session cookie (used by the OIDC login session)
+  # ---------------------------------------------------------------------------
+  # HttpOnly: cookie is never readable by JavaScript.
+  # SameSite: Lax is safe for same-origin deployments and top-level navigations.
+  #           If the frontend is a cross-origin SPA calling the backend over HTTPS,
+  #           switch to same-site: none and secure: true (see .env.example).
+  # Secure:  false locally (HTTP), true in production (HTTPS only).
+server:
+  servlet:
+    session:
+      cookie:
+        http-only: true
+        same-site: lax
+        secure: ${SESSION_COOKIE_SECURE:false}
 
-# ---------------------------------------------------------------------------
-# Security - Keycloak proxy endpoints (/api/auth/*)
-# ---------------------------------------------------------------------------
-# Backend -> Keycloak intermediary: password grant, refresh, logout and user
-# registration (Admin API via the backend client's service account). All values
-# come from environment variables - never hardcoded.
+  # ---------------------------------------------------------------------------
+  # Application-level configuration
+  # ---------------------------------------------------------------------------
 app:
   keycloak:
     base-url: ${KEYCLOAK_BASE_URL:http://localhost:8180}
     realm: ${KEYCLOAK_REALM:delivflow}
-    # Client used for password / refresh grants (the public frontend client).
-    client-id: ${KEYCLOAK_CLIENT_ID:delivflow-frontend}
-    # Only needed if that client is confidential; leave empty for a public client.
-    client-secret: ${KEYCLOAK_CLIENT_SECRET:}
     # Backend service-account client (Client authentication + Service accounts ON).
     backend-client-id: ${KEYCLOAK_BACKEND_CLIENT_ID:delivflow-backend}
     backend-client-secret: ${KEYCLOAK_BACKEND_CLIENT_SECRET:}
-
-# ---------------------------------------------------------------------------
-# CORS - explicit frontend origins, comma separated
-# ---------------------------------------------------------------------------
-app:
   cors:
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173,http://localhost:5174}
+  security:
+    oidc:
+      logout:
+        post-logout-redirect-uri: ${OIDC_LOGOUT_POST_LOGOUT_REDIRECT_URI:http://localhost:8080/}
 
+  # ---------------------------------------------------------------------------
+  # Logging
+  # ---------------------------------------------------------------------------
 logging:
   level:
     org.hibernate.SQL: DEBUG

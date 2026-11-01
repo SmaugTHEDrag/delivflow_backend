@@ -2,13 +2,13 @@ package com.example.delivflowbackend.common.security;
 
 import com.example.delivflowbackend.common.exception.UserDisabledException;
 import com.example.delivflowbackend.user.entity.User;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.mock.http.MockHttpServletResponse;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.mock.web.MockFilterChain;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -26,11 +26,14 @@ class KeycloakUserSyncFilterTest {
     @Mock
     private CurrentUserService currentUserService;
 
-    @Mock
-    private ObjectMapper objectMapper;
+    private final JsonMapper jsonMapper = JsonMapper.builder().build();
 
-    @InjectMocks
     private KeycloakUserSyncFilter filter;
+
+    @BeforeEach
+    void setUp() {
+        filter = new KeycloakUserSyncFilter(currentUserService, jsonMapper);
+    }
 
     @Test
     void activeUserLetsTheChainProceed() throws Exception {
@@ -49,7 +52,7 @@ class KeycloakUserSyncFilterTest {
 
         filter.doFilter(request, response, chain);
 
-        assertThat(chain.wasCalled).isTrue();
+        assertThat(chain.getRequest()).isSameAs(request);
         verify(currentUserService).loadOrCreate(jwt);
         SecurityContextHolder.clearContext();
     }
@@ -73,7 +76,8 @@ class KeycloakUserSyncFilterTest {
         filter.doFilter(request, response, chain);
 
         assertThat(response.getStatus()).isEqualTo(403);
-        assertThat(chain.wasCalled).isFalse();
+        assertThat(chain.getRequest()).isNull();
+        assertThat(response.getContentAsString()).contains("Account is disabled");
         SecurityContextHolder.clearContext();
     }
 
@@ -87,7 +91,7 @@ class KeycloakUserSyncFilterTest {
 
         filter.doFilter(request, response, chain);
 
-        assertThat(chain.wasCalled).isTrue();
+        assertThat(chain.getRequest()).isSameAs(request);
         verifyNoInteractions(currentUserService);
         SecurityContextHolder.clearContext();
     }
