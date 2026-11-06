@@ -44,7 +44,7 @@ class KeycloakUserSyncFilterTest {
                 .build();
         SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken(jwt, "token", List.of()));
-        when(currentUserService.loadOrCreate(jwt)).thenReturn(new User());
+        when(currentUserService.requireLocalUser(jwt)).thenReturn(new User());
 
         MockHttpServletRequest request = new MockHttpServletRequest();
         MockHttpServletResponse response = new MockHttpServletResponse();
@@ -53,7 +53,7 @@ class KeycloakUserSyncFilterTest {
         filter.doFilter(request, response, chain);
 
         assertThat(chain.getRequest()).isSameAs(request);
-        verify(currentUserService).loadOrCreate(jwt);
+        verify(currentUserService).requireLocalUser(jwt);
         SecurityContextHolder.clearContext();
     }
 
@@ -66,7 +66,7 @@ class KeycloakUserSyncFilterTest {
                 .build();
         SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken(jwt, "token", List.of()));
-        when(currentUserService.loadOrCreate(jwt))
+        when(currentUserService.requireLocalUser(jwt))
                 .thenThrow(new UserDisabledException("Account is disabled"));
 
         MockHttpServletRequest request = new MockHttpServletRequest();
@@ -93,6 +93,29 @@ class KeycloakUserSyncFilterTest {
 
         assertThat(chain.getRequest()).isSameAs(request);
         verifyNoInteractions(currentUserService);
+        SecurityContextHolder.clearContext();
+    }
+
+    @Test
+    void synchronizationFailureFailsClosed() throws Exception {
+        Jwt jwt = Jwt.withTokenValue("token")
+                .header("alg", "none")
+                .issuer("http://localhost:8180/realms/delivflow")
+                .subject("kc-user")
+                .build();
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(jwt, "token", List.of()));
+        when(currentUserService.requireLocalUser(jwt)).thenThrow(new IllegalStateException("missing identity"));
+
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+
+        filter.doFilter(request, response, chain);
+
+        assertThat(response.getStatus()).isEqualTo(500);
+        assertThat(response.getContentAsString()).contains("Unable to synchronize authenticated user");
+        assertThat(chain.getRequest()).isNull();
         SecurityContextHolder.clearContext();
     }
 }

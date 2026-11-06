@@ -10,7 +10,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
     properties = {
         "spring.datasource.password=dummy",
         "spring.flyway.enabled=false",
-        "spring.jpa.ddl-auto=none"
+        "spring.jpa.hibernate.ddl-auto=none"
     }
 )
 @ActiveProfiles("test")

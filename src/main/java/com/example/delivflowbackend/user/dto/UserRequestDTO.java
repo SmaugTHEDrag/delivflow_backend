@@ -9,8 +9,7 @@ import lombok.Data;
 
 /**
  * Application profile data an admin may change.
- * Identity (keycloak_issuer / keycloak_subject) and email verification live in
- * Keycloak and are never updated through this endpoint.
+ * Keycloak identity and email verification are never updated through this endpoint.
  */
 @Data
 public class UserRequestDTO {
@@ -19,8 +18,11 @@ public class UserRequestDTO {
     @Email(message = "Email is valid")
     private String email;
 
-    @Size(max = 160, message = "Display name must not be longer than 160 characters")
-    private String displayName;
+    @Size(max = 160, message = "First name must not be longer than 160 characters")
+    private String firstName;
+
+    @Size(max = 160, message = "Last name must not be longer than 160 characters")
+    private String lastName;
 
     @Size(max = 500, message = "Avatar URL must not be longer than 500 characters")
     private String avatarUrl;

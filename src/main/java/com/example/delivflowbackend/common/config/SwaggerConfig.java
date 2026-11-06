@@ -6,7 +6,6 @@ import io.swagger.v3.oas.annotations.security.SecurityScheme;
 import io.swagger.v3.oas.models.Components;
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.info.Info;
-import io.swagger.v3.oas.models.security.SecurityRequirement;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -27,8 +26,6 @@ public class SwaggerConfig {
                 .info(new Info()
                         .title("DelivFlow API")
                         .version("1.0.0")
-                        .description("API documentation for DelivFlow project"))
-                // Apply JWT auth globally
-                .addSecurityItem(new SecurityRequirement().addList("bearerAuth"));
+                        .description("API documentation for DelivFlow project"));
     }
 }

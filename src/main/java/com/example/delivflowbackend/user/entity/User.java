@@ -16,21 +16,19 @@ import org.hibernate.annotations.JdbcTypeCode;
 /**
  * Application user profile.
  *
- * Authentication (password, login, tokens) belongs to Keycloak; this table only
- * stores application-level profile data. The link to Keycloak is the OIDC pair
- * ({@code keycloak_issuer}, {@code keycloak_subject}) -- the JWT "iss" and "sub"
- * claims. The subject is treated as opaque text, not assumed to be a UUID.
+ * Authentication (password and tokens) belongs to Keycloak; this table stores
+ * the application profile and the Keycloak subject used to identify it.
  *
- * Columns match {@code delivflow.sql} (Flyway {@code V1__init_delivflow.sql}):
- * {@code users} table.
+ * The table is managed by Flyway; see the migration history for the legacy
+ * profile backfill.
  */
 @Entity
 @Table(
         name = "users",
-        uniqueConstraints = @UniqueConstraint(
-                name = "uq_users_oidc_identity",
-                columnNames = {"keycloak_issuer", "keycloak_subject"}
-        )
+        uniqueConstraints = {
+                @UniqueConstraint(name = "uq_users_keycloak_id", columnNames = {"keycloak_id"}),
+                @UniqueConstraint(name = "uq_users_email", columnNames = {"email"})
+        }
 )
 @Getter
 @Setter
@@ -44,17 +42,20 @@ public class User {
     @Column(name = "id", nullable = false, updatable = false)
     private UUID id;
 
-    @Column(name = "keycloak_issuer", nullable = false, length = 512)
-    private String keycloakIssuer;
+    @Column(name = "keycloak_id", nullable = false, length = 255)
+    private String keycloakId;
 
-    @Column(name = "keycloak_subject", nullable = false, length = 255)
-    private String keycloakSubject;
+    @Column(name = "username", nullable = false, length = 320)
+    private String username;
 
-    @Column(name = "email", length = 320)
+    @Column(name = "email", nullable = false, length = 320)
     private String email;
 
-    @Column(name = "display_name", length = 160)
-    private String displayName;
+    @Column(name = "first_name", length = 160)
+    private String firstName;
+
+    @Column(name = "last_name", length = 160)
+    private String lastName;
 
     @Column(name = "avatar_url", columnDefinition = "TEXT")
     private String avatarUrl;
@@ -63,7 +64,7 @@ public class User {
     @Builder.Default
     private Boolean emailVerified = false;
 
-    @Column(name = "status", nullable = false, length = 20)
+    @Column(name = "status", nullable = false, columnDefinition = "user_status")
     @Enumerated(EnumType.STRING)
     @JdbcTypeCode(SqlTypes.NAMED_ENUM)
     @Builder.Default

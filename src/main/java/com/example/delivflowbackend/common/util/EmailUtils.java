@@ -1,5 +1,7 @@
 package com.example.delivflowbackend.common.util;
 
+import java.util.Locale;
+
 /**
  * Single shared helper for email normalization.
  *
@@ -17,6 +19,6 @@ public final class EmailUtils {
      * Returns {@code null} for a {@code null} input.
      */
     public static String normalizeEmail(String email) {
-        return email == null ? null : email.trim().toLowerCase();
+        return email == null ? null : email.trim().toLowerCase(Locale.ROOT);
     }
 }

@@ -1,10 +1,8 @@
 spring:
+  config:
+    import: optional:file:.env[.properties]
   application:
     name: delivflowbackend
-
-  # ---------------------------------------------------------------------------
-  # Database (PostgreSQL) - all values from environment variables, no secrets
-  # ---------------------------------------------------------------------------
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5433/delivflow}
     username: ${DB_USERNAME:delivflow}
@@ -12,9 +10,8 @@ spring:
     driver-class-name: org.postgresql.Driver
   jpa:
     database-platform: org.hibernate.dialect.PostgreSQLDialect
-    # The schema is managed by Flyway (V1__init_delivflow.sql); Hibernate only
-    # validates that the entity mapping matches the existing schema.
-    ddl-auto: validate
+    hibernate:
+      ddl-auto: validate
     naming:
       physical-strategy: org.hibernate.boot.model.naming.PhysicalNamingStrategyStandardImpl
     properties:
@@ -23,75 +20,36 @@ spring:
   flyway:
     enabled: true
     locations: classpath:db/migration
-
-  # ---------------------------------------------------------------------------
-  # Security - OAuth2 / OpenID Connect client (Keycloak realm "delivflow")
-  # ---------------------------------------------------------------------------
-  # Browser-based login uses the OIDC Authorization Code Flow with a server-side
-  # HTTP session. The confidential client secret is never sent to the browser;
-  # it is only used by the backend when exchanging the authorization code.
   security:
     oauth2:
-      client:
-        registration:
-          keycloak:
-            provider: keycloak
-            client-id: delivflow-backend
-            client-secret: ${KEYCLOAK_CLIENT_SECRET:}
-            authorization-grant-type: authorization_code
-            scope:
-              - openid
-              - profile
-              - email
-            # Default redirect URI: http://localhost:8080/login/oauth2/code/keycloak
-
-        provider:
-          keycloak:
-            issuer-uri: ${KEYCLOAK_ISSUER_URI:http://localhost:8180/realms/delivflow}
-
-      # JWT resource server for Bearer-token API clients (existing /api/users API).
-      # Validates the signature, issuer and expiration of incoming Bearer tokens
-      # against the realm's JWKS endpoint.
       resourceserver:
         jwt:
           issuer-uri: ${KEYCLOAK_ISSUER_URI:http://localhost:8180/realms/delivflow}
 
-  # ---------------------------------------------------------------------------
-  # Session cookie (used by the OIDC login session)
-  # ---------------------------------------------------------------------------
-  # HttpOnly: cookie is never readable by JavaScript.
-  # SameSite: Lax is safe for same-origin deployments and top-level navigations.
-  #           If the frontend is a cross-origin SPA calling the backend over HTTPS,
-  #           switch to same-site: none and secure: true (see .env.example).
-  # Secure:  false locally (HTTP), true in production (HTTPS only).
-server:
-  servlet:
-    session:
-      cookie:
-        http-only: true
-        same-site: lax
-        secure: ${SESSION_COOKIE_SECURE:false}
-
-  # ---------------------------------------------------------------------------
-  # Application-level configuration
-  # ---------------------------------------------------------------------------
 app:
   keycloak:
     base-url: ${KEYCLOAK_BASE_URL:http://localhost:8180}
     realm: ${KEYCLOAK_REALM:delivflow}
-    # Backend service-account client (Client authentication + Service accounts ON).
+    issuer-uri: ${KEYCLOAK_ISSUER_URI:http://localhost:8180/realms/delivflow}
     backend-client-id: ${KEYCLOAK_BACKEND_CLIENT_ID:delivflow-backend}
     backend-client-secret: ${KEYCLOAK_BACKEND_CLIENT_SECRET:}
+    direct-access-grant:
+      enabled: ${KEYCLOAK_DIRECT_ACCESS_GRANT_ENABLED:true}
+    email-verification:
+      client-id: ${KEYCLOAK_EMAIL_VERIFICATION_CLIENT_ID:delivflow-frontend}
+      redirect-uri: ${KEYCLOAK_EMAIL_VERIFICATION_REDIRECT_URI:http://localhost:3000/login}
+      lifespan-seconds: ${KEYCLOAK_EMAIL_VERIFICATION_LIFESPAN_SECONDS:86400}
+      reconciliation-interval-ms: ${KEYCLOAK_EMAIL_VERIFICATION_RECONCILIATION_INTERVAL_MS:300000}
+  auth:
+    refresh-cookie:
+      secure: ${AUTH_REFRESH_COOKIE_SECURE:true}
+      same-site: ${AUTH_REFRESH_COOKIE_SAME_SITE:Lax}
+  security:
+    jwt:
+      audiences: ${KEYCLOAK_EXPECTED_AUDIENCES:}
   cors:
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173,http://localhost:5174}
-  security:
-    oidc:
-      logout:
-        post-logout-redirect-uri: ${OIDC_LOGOUT_POST_LOGOUT_REDIRECT_URI:http://localhost:8080/}
 
-  # ---------------------------------------------------------------------------
-  # Logging
-  # ---------------------------------------------------------------------------
 logging:
   level:
     org.hibernate.SQL: DEBUG
