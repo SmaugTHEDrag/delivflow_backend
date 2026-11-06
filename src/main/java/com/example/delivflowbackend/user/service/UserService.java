@@ -74,8 +74,11 @@ public class UserService implements IUserService {
         if (userRequestDTO.getEmail() != null) {
             existingUser.setEmail(EmailUtils.normalizeEmail(userRequestDTO.getEmail()));
         }
-        if (userRequestDTO.getDisplayName() != null) {
-            existingUser.setDisplayName(userRequestDTO.getDisplayName());
+        if (userRequestDTO.getFirstName() != null) {
+            existingUser.setFirstName(userRequestDTO.getFirstName().trim());
+        }
+        if (userRequestDTO.getLastName() != null) {
+            existingUser.setLastName(userRequestDTO.getLastName().trim());
         }
         if (userRequestDTO.getAvatarUrl() != null) {
             existingUser.setAvatarUrl(userRequestDTO.getAvatarUrl());

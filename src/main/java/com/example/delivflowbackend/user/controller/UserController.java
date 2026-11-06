@@ -6,6 +6,7 @@ import com.example.delivflowbackend.user.dto.UserRequestDTO;
 import com.example.delivflowbackend.user.form.UserFilterForm;
 import com.example.delivflowbackend.user.service.IUserService;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -23,8 +24,9 @@ import org.springframework.web.bind.annotation.*;
  * Users are never hard-deleted: disabling sets status = DISABLED (+ deactivated_at).
  */
 @RestController
-@RequestMapping("api/users")
+@RequestMapping("/api/users")
 @Tag(name = "User API", description = "APIs for application users")
+@SecurityRequirement(name = "bearerAuth")
 @RequiredArgsConstructor
 public class UserController {
 
@@ -39,14 +41,14 @@ public class UserController {
 
     @Operation(summary = "Get user by ID", description = "Only admin can get user by ID")
     @PreAuthorize("hasRole('ADMIN')")
-    @GetMapping("{id}")
+    @GetMapping("/{id}")
     public ResponseEntity<UserDTO> getUserById(@PathVariable UUID id){
         return ResponseEntity.ok(userService.getUserById(id));
     }
 
     @Operation(summary = "Update user profile", description = "Only admin can update a user profile")
     @PreAuthorize("hasRole('ADMIN')")
-    @PutMapping("{id}")
+    @PutMapping("/{id}")
     public ResponseEntity<UserDTO> updateUser(@PathVariable UUID id, @RequestBody @Valid UserRequestDTO userRequestDTO){
         UserDTO updateUserDTO = userService.updateUser(id, userRequestDTO);
         return ResponseEntity.ok(updateUserDTO);
@@ -54,7 +56,7 @@ public class UserController {
 
     @Operation(summary = "Disable user", description = "Only admin can disable a user (sets DISABLED + deactivated_at)")
     @PreAuthorize("hasRole('ADMIN')")
-    @DeleteMapping("{id}")
+    @DeleteMapping("/{id}")
     public ResponseEntity<Object> disableUser(@PathVariable UUID id){
         userService.disableUser(id);
         return new ResponseEntity<>("Id: " + id + " is disabled", HttpStatus.OK);

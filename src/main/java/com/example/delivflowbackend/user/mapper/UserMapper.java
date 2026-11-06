@@ -14,8 +14,8 @@ public interface UserMapper {
 
     // json null means "leave unchanged", not "set to null"
     @Mapping(target = "id", ignore = true)
-    @Mapping(target = "keycloakIssuer", ignore = true)
-    @Mapping(target = "keycloakSubject", ignore = true)
+    @Mapping(target = "keycloakId", ignore = true)
+    @Mapping(target = "username", ignore = true)
     @Mapping(target = "createdAt", ignore = true)
     @Mapping(target = "updatedAt", ignore = true)
     @Mapping(target = "emailVerified", ignore = true)

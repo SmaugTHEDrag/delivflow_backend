@@ -2,7 +2,7 @@ package com.example.delivflowbackend.user.entity;
 
 /**
  * Application user status, mirrored by the PostgreSQL {@code user_status} enum
- * ({@code ACTIVE}, {@code DISABLED}).
+ * ({@code ACTIVE}, {@code DISABLED}, {@code PENDING_VERIFICATION}).
  *
  * Users are never hard-deleted when their Keycloak account is disabled: the row is
  * marked {@code DISABLED} (and {@code deactivated_at} is set) so audit references
@@ -10,5 +10,6 @@ package com.example.delivflowbackend.user.entity;
  */
 public enum UserStatus {
     ACTIVE,
-    DISABLED
+    DISABLED,
+    PENDING_VERIFICATION
 }
