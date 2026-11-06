@@ -1,6 +1,5 @@
 package com.example.delivflowbackend.common.security;
 
-import com.example.delivflowbackend.common.exception.UserDisabledException;
 import com.example.delivflowbackend.user.entity.User;
 import com.example.delivflowbackend.user.entity.UserStatus;
 import com.example.delivflowbackend.user.repository.IUserRepository;
@@ -10,23 +9,18 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 
 import java.util.List;
 import java.util.Optional;
-import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.*;
 
-/**
- * The application user is resolved from the Keycloak token's OIDC identity pair
- * (issuer + sub). Created on first login, never updated afterwards, and a
- * DISABLED account is rejected.
- */
 @ExtendWith(MockitoExtension.class)
 class CurrentUserServiceTest {
 
@@ -41,100 +35,80 @@ class CurrentUserServiceTest {
         SecurityContextHolder.clearContext();
     }
 
-    private Jwt token(String issuer, String subject) {
-        return Jwt.withTokenValue("token")
-                .header("alg", "none")
-                .issuer(issuer)
+    @Test
+    void resolvesActiveLocalUserByJwtSubject() {
+        Jwt jwt = token("kc-subject", true);
+        User user = activeUser("kc-subject");
+        when(userRepository.findByKeycloakId("kc-subject")).thenReturn(Optional.of(user));
+
+        assertThat(currentUserService.requireLocalUser(jwt)).isSameAs(user);
+        verify(userRepository).findByKeycloakId("kc-subject");
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    void rejectsJwtWithNoLinkedLocalProfile() {
+        when(userRepository.findByKeycloakId("unknown")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> currentUserService.requireLocalUser(token("unknown", true)))
+                .isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test
+    void rejectsDisabledOrUnverifiedProfilesAndUnverifiedJwt() {
+        User disabled = activeUser("disabled");
+        disabled.setStatus(UserStatus.DISABLED);
+        when(userRepository.findByKeycloakId("disabled")).thenReturn(Optional.of(disabled));
+        assertThatThrownBy(() -> currentUserService.requireLocalUser(token("disabled", true)))
+                .isInstanceOf(AccessDeniedException.class);
+
+        User unverified = activeUser("unverified");
+        unverified.setEmailVerified(false);
+        when(userRepository.findByKeycloakId("unverified")).thenReturn(Optional.of(unverified));
+        assertThatThrownBy(() -> currentUserService.requireLocalUser(token("unverified", true)))
+                .isInstanceOf(AccessDeniedException.class);
+
+        User verified = activeUser("jwt-unverified");
+        when(userRepository.findByKeycloakId("jwt-unverified")).thenReturn(Optional.of(verified));
+        assertThatThrownBy(() -> currentUserService.requireLocalUser(token("jwt-unverified", false)))
+                .isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test
+    void currentUserComesFromSecurityContextNotAClientSuppliedId() {
+        Jwt jwt = token("subject-from-token", true);
+        User user = activeUser("subject-from-token");
+        SecurityContextHolder.getContext().setAuthentication(
+                new JwtAuthenticationToken(jwt, List.of(), "frontend-user-id"));
+        when(userRepository.findByKeycloakId("subject-from-token")).thenReturn(Optional.of(user));
+
+        assertThat(currentUserService.getCurrentUser()).isSameAs(user);
+        verify(userRepository).findByKeycloakId("subject-from-token");
+        verify(userRepository, never()).findById(any());
+    }
+
+    @Test
+    void missingAuthenticationIsRejected() {
+        assertThatThrownBy(() -> currentUserService.getCurrentUser())
+                .isInstanceOf(AccessDeniedException.class);
+    }
+
+    private Jwt token(String subject, boolean emailVerified) {
+        return Jwt.withTokenValue("jwt")
+                .header("alg", "RS256")
+                .issuer("http://localhost:8180/realms/delivflow")
                 .subject(subject)
-                .claim("email", "Alice@Example.COM")
-                .claim("name", "Alice Doe")
-                .claim("email_verified", true)
+                .claim("email_verified", emailVerified)
                 .build();
     }
 
-    private void authenticate(Jwt jwt) {
-        SecurityContextHolder.getContext().setAuthentication(
-                new JwtAuthenticationToken(jwt, List.of(), jwt.getSubject()));
-    }
-
-    @Test
-    void existingUserIsLoadedByIssuerAndSubjectAndNotUpdated() {
-        String issuer = "http://localhost:8180/realms/delivflow";
-        authenticate(token(issuer, "kc-123"));
-        User existing = new User();
-        existing.setId(UUID.randomUUID());
-        existing.setKeycloakIssuer(issuer);
-        existing.setKeycloakSubject("kc-123");
-        existing.setEmail("alice@example.com");
-        existing.setStatus(UserStatus.ACTIVE);
-        when(userRepository.findByKeycloakIssuerAndKeycloakSubject(issuer, "kc-123"))
-                .thenReturn(Optional.of(existing));
-
-        assertThat(currentUserService.getCurrentUser()).isSameAs(existing);
-        verify(userRepository, never()).save(any());
-        // existing row is not rewritten
-        assertThat(existing.getEmail()).isEqualTo("alice@example.com");
-    }
-
-    @Test
-    void unknownUserIsCreatedFromTheTokenWithNormalizedLowercaseEmail() {
-        String issuer = "http://localhost:8180/realms/delivflow";
-        authenticate(token(issuer, "kc-123"));
-        when(userRepository.findByKeycloakIssuerAndKeycloakSubject(issuer, "kc-123"))
-                .thenReturn(Optional.empty());
-        when(userRepository.save(any(User.class))).thenAnswer(invocation -> invocation.getArgument(0));
-
-        User created = currentUserService.getCurrentUser();
-
-        assertThat(created.getKeycloakIssuer()).isEqualTo(issuer);
-        assertThat(created.getKeycloakSubject()).isEqualTo("kc-123");
-        // email is normalized: trim + toLowerCase
-        assertThat(created.getEmail()).isEqualTo("alice@example.com");
-        assertThat(created.getDisplayName()).isEqualTo("Alice Doe");
-        assertThat(created.getEmailVerified()).isTrue();
-        assertThat(created.getStatus()).isEqualTo(UserStatus.ACTIVE);
-        assertThat(created.getLastLoginAt()).isNotNull();
-    }
-
-    @Test
-    void secondLoginFindsTheSameUserByIssuerAndSubject() {
-        String issuer = "http://localhost:8180/realms/delivflow";
-        authenticate(token(issuer, "kc-123"));
-        User existing = new User();
-        existing.setId(UUID.randomUUID());
-        existing.setKeycloakIssuer(issuer);
-        existing.setKeycloakSubject("kc-123");
-        existing.setEmail("bob@example.com");
-        existing.setStatus(UserStatus.ACTIVE);
-        when(userRepository.findByKeycloakIssuerAndKeycloakSubject(issuer, "kc-123"))
-                .thenReturn(Optional.of(existing));
-
-        User first = currentUserService.getCurrentUser();
-        User second = currentUserService.getCurrentUser();
-
-        assertThat(first).isSameAs(existing);
-        assertThat(second).isSameAs(existing);
-        assertThat(existing.getEmail()).isEqualTo("bob@example.com"); // unchanged
-    }
-
-    @Test
-    void disabledUserIsRejected() {
-        String issuer = "http://localhost:8180/realms/delivflow";
-        authenticate(token(issuer, "kc-disabled"));
-        User disabled = new User();
-        disabled.setKeycloakIssuer(issuer);
-        disabled.setKeycloakSubject("kc-disabled");
-        disabled.setStatus(UserStatus.DISABLED);
-        when(userRepository.findByKeycloakIssuerAndKeycloakSubject(issuer, "kc-disabled"))
-                .thenReturn(Optional.of(disabled));
-
-        assertThatThrownBy(() -> currentUserService.getCurrentUser())
-                .isInstanceOf(UserDisabledException.class);
-    }
-
-    @Test
-    void missingTokenFailsLoudly() {
-        assertThatThrownBy(() -> currentUserService.getCurrentUser())
-                .isInstanceOf(IllegalStateException.class);
+    private User activeUser(String keycloakId) {
+        User user = new User();
+        user.setKeycloakId(keycloakId);
+        user.setEmail("user@example.com");
+        user.setUsername("user");
+        user.setEmailVerified(true);
+        user.setStatus(UserStatus.ACTIVE);
+        return user;
     }
 }
