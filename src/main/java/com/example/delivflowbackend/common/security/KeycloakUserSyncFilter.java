@@ -1,6 +1,5 @@
 package com.example.delivflowbackend.common.security;
 
-import com.example.delivflowbackend.common.exception.UserDisabledException;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -42,6 +41,12 @@ public class KeycloakUserSyncFilter extends OncePerRequestFilter {
     private final JsonMapper jsonMapper;
 
     @Override
+    protected boolean shouldNotFilter(HttpServletRequest request) {
+        return "PUT".equals(request.getMethod())
+                && request.getServletPath().startsWith("/api/auth/email-verification/sync/");
+    }
+
+    @Override
     protected void doFilterInternal(
             HttpServletRequest request,
             HttpServletResponse response,
@@ -55,14 +60,14 @@ public class KeycloakUserSyncFilter extends OncePerRequestFilter {
             try {
                 if (authentication.getPrincipal() instanceof Jwt jwt) {
                     // Bearer-token path
-                    currentUserService.loadOrCreate(jwt);
+                    currentUserService.requireLocalUser(jwt);
                 } else if (authentication.getPrincipal() instanceof OidcUser oidcUser) {
                     // Session-based OIDC login path
-                    currentUserService.loadOrCreate(oidcUser);
+                    currentUserService.requireLocalUser(oidcUser);
                 }
 
                 // Ensures the application user exists and is not DISABLED
-            } catch (UserDisabledException e) {
+            } catch (org.springframework.security.access.AccessDeniedException e) {
 
                 writeError(
                         response,
@@ -72,11 +77,16 @@ public class KeycloakUserSyncFilter extends OncePerRequestFilter {
                 return;
 
             } catch (Exception e) {
-
                 log.error(
                         "Error syncing user from Keycloak token",
                         e
                 );
+                writeError(
+                        response,
+                        HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+                        "Unable to synchronize authenticated user"
+                );
+                return;
             }
         }
 
