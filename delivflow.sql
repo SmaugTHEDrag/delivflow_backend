@@ -15,7 +15,7 @@
 -- ENUM TYPES
 -- ---------------------------------------------------------------------------
 
-CREATE TYPE user_status AS ENUM ('ACTIVE', 'DISABLED');
+CREATE TYPE user_status AS ENUM ('ACTIVE', 'DISABLED', 'PENDING_VERIFICATION');
 CREATE TYPE membership_status AS ENUM ('ACTIVE', 'INVITED', 'REVOKED');
 CREATE TYPE workspace_role AS ENUM ('OWNER', 'ADMIN', 'MEMBER');
 CREATE TYPE project_role AS ENUM ('AGENCY_OWNER', 'AGENCY_MEMBER', 'CLIENT');
@@ -53,18 +53,19 @@ $$;
 -- ---------------------------------------------------------------------------
 
 -- Application profile only. Keycloak remains the source of truth for authentication.
--- keycloak_subject stores the OIDC "sub" claim; treat it as opaque text, not necessarily a UUID.
--- email_verified is a synchronized snapshot for display/business logic, not proof on its own.
+-- keycloak_id stores the Keycloak subject and is treated as opaque text.
+-- email_verified is a synchronized snapshot, not proof on its own.
 -- email is always stored lowercase and trimmed. The backend must normalize it
 -- (trim + toLowerCase) before saving or searching; the CHECK below enforces it at DB level.
 -- status/deactivated_at: do not delete a user when the Keycloak account is disabled;
 -- mark the user DISABLED instead so audit references stay intact.
 CREATE TABLE users (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    keycloak_issuer     VARCHAR(512) NOT NULL,
-    keycloak_subject    VARCHAR(255) NOT NULL,
-    email               VARCHAR(320),
-    display_name        VARCHAR(160),
+    keycloak_id         VARCHAR(255) NOT NULL UNIQUE,
+    username            VARCHAR(320) NOT NULL,
+    email               VARCHAR(320) NOT NULL UNIQUE,
+    first_name          VARCHAR(160),
+    last_name           VARCHAR(160),
     avatar_url          TEXT,
     email_verified      BOOLEAN NOT NULL DEFAULT FALSE,
     status              user_status NOT NULL DEFAULT 'ACTIVE',
@@ -72,16 +73,12 @@ CREATE TABLE users (
     last_login_at       TIMESTAMPTZ,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT uq_users_oidc_identity UNIQUE (keycloak_issuer, keycloak_subject),
-    CONSTRAINT ck_users_email_lower
-        CHECK (email IS NULL OR email = lower(email)),
+    CONSTRAINT ck_users_email_lower CHECK (email = lower(email)),
     CONSTRAINT ck_users_deactivated_at
         CHECK (status <> 'DISABLED' OR deactivated_at IS NOT NULL)
 );
 
-CREATE UNIQUE INDEX uq_users_email
-    ON users (email)
-    WHERE email IS NOT NULL;
+CREATE UNIQUE INDEX uq_users_username ON users (lower(username));
 
 CREATE INDEX idx_users_status ON users (status);
 
