@@ -1,0 +1,33 @@
+﻿spring:
+  datasource:
+    url: jdbc:h2:mem:delivflowtest;MODE=PostgreSQL;DB_CLOSE_DELAY=-1
+    username: sa
+    password: ""
+    driver-class-name: org.h2.Driver
+  jpa:
+    database-platform: org.hibernate.dialect.H2Dialect
+    ddl-auto: none
+  flyway:
+    enabled: false
+  security:
+    oauth2:
+      client:
+        registration:
+          keycloak:
+            provider: test-keycloak
+            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+        provider:
+          test-keycloak:
+            authorization-uri: http://localhost:8080/realms/test/protocol/openid-connect/auth
+            token-uri: http://localhost:8080/realms/test/protocol/openid-connect/token
+            jwk-set-uri: http://localhost:8080/realms/test/protocol/openid-connect/certs
+            user-info-uri: http://localhost:8080/realms/test/protocol/openid-connect/userinfo
+            user-name-attribute: sub
+app:
+  cors:
+    allowed-origins: http://localhost:3000
+  keycloak:
+    base-url: http://localhost:8080
+    realm: test
+    backend-client-id: test-client
+    backend-client-secret: fake-test-secret

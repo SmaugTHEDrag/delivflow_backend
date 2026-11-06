@@ -1,32 +1,34 @@
 package com.example.delivflowbackend.common.security;
 
-import com.example.delivflowbackend.user.repository.IUserRepository;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.MediaType;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.core.oidc.user.OidcUser;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
-import jakarta.servlet.FilterChain;
-import jakarta.servlet.ServletException;
-import jakarta.servlet.http.HttpServletRequest;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.oauth2.jwt.Jwt;
-import org.springframework.http.MediaType;
-
 /**
- * Syncs the authenticated Keycloak subject to an application user on every
- * request, after the bearer token has been validated.
+ * Syncs the authenticated Keycloak subject to an application user
+ * on every request, after the bearer token has been validated.
  *
- * Runs after BearerTokenAuthenticationFilter so the SecurityContext already
- * holds the Jwt. A DISABLED user is rejected here (403) so that authorization
- * checks effectively run on every request, independent of filter ordering.
+ * Runs after BearerTokenAuthenticationFilter so the SecurityContext
+ * already holds the authentication (Jwt for the Bearer-token path,
+ * OidcUser for the session-based OIDC login path).
+ *
+ * Both paths identify users by the same OIDC pair (issuer, subject).
+ * A DISABLED user is rejected here (403).
  */
 @Component
 @RequiredArgsConstructor
@@ -34,33 +36,76 @@ import org.springframework.http.MediaType;
 public class KeycloakUserSyncFilter extends OncePerRequestFilter {
 
     private final CurrentUserService currentUserService;
-    private final ObjectMapper objectMapper;
+
+    // Jackson 3 - Spring Boot 4
+    private final JsonMapper jsonMapper;
 
     @Override
-    protected void doFilterInternal(HttpServletRequest request,
-                                    HttpServletResponse response,
-                                    FilterChain filterChain)
-            throws IOException, ServletException {
-        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-        if (authentication != null && authentication.getPrincipal() instanceof Jwt jwt) {
+    protected boolean shouldNotFilter(HttpServletRequest request) {
+        return "PUT".equals(request.getMethod())
+                && request.getServletPath().startsWith("/api/auth/email-verification/sync/");
+    }
+
+    @Override
+    protected void doFilterInternal(
+            HttpServletRequest request,
+            HttpServletResponse response,
+            FilterChain filterChain
+    ) throws IOException, ServletException {
+
+        Authentication authentication =
+                SecurityContextHolder.getContext().getAuthentication();
+
+        if (authentication != null) {
             try {
-                // ensures the application user exists and is not DISABLED
-                currentUserService.loadOrCreate(jwt);
-            } catch (Exception e) {
-                if (e instanceof com.example.delivflowbackend.common.exception.UserDisabledException) {
-                    writeError(response, HttpServletResponse.SC_FORBIDDEN, e.getMessage());
-                    return;
+                if (authentication.getPrincipal() instanceof Jwt jwt) {
+                    // Bearer-token path
+                    currentUserService.requireLocalUser(jwt);
+                } else if (authentication.getPrincipal() instanceof OidcUser oidcUser) {
+                    // Session-based OIDC login path
+                    currentUserService.requireLocalUser(oidcUser);
                 }
-                log.error("Error syncing user from Keycloak JWT: {}", e.getMessage());
+
+                // Ensures the application user exists and is not DISABLED
+            } catch (org.springframework.security.access.AccessDeniedException e) {
+
+                writeError(
+                        response,
+                        HttpServletResponse.SC_FORBIDDEN,
+                        e.getMessage()
+                );
+                return;
+
+            } catch (Exception e) {
+                log.error(
+                        "Error syncing user from Keycloak token",
+                        e
+                );
+                writeError(
+                        response,
+                        HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+                        "Unable to synchronize authenticated user"
+                );
+                return;
             }
         }
+
         filterChain.doFilter(request, response);
     }
 
-    private void writeError(HttpServletResponse response, int status, String message) throws IOException {
+    private void writeError(
+            HttpServletResponse response,
+            int status,
+            String message
+    ) throws IOException {
+
         response.setStatus(status);
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());
-        objectMapper.writeValue(response.getWriter(), Map.of("message", message));
+
+        jsonMapper.writeValue(
+                response.getWriter(),
+                Map.of("message", message)
+        );
     }
 }

@@ -1,30 +1,31 @@
 package com.example.delivflowbackend.security;
 
-import com.example.delivflowbackend.common.config.KeycloakJwtAuthenticationConverter;
-import com.example.delivflowbackend.common.config.SecurityConfig;
-import com.example.delivflowbackend.common.security.KeycloakUserSyncFilter;
 import com.example.delivflowbackend.common.exception.ResourceNotFoundException;
+import com.example.delivflowbackend.common.security.CurrentUserService;
 import com.example.delivflowbackend.user.controller.UserController;
 import com.example.delivflowbackend.user.dto.UserPageResponse;
 import com.example.delivflowbackend.user.entity.User;
 import com.example.delivflowbackend.user.service.IUserService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.ActiveProfiles;
 
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -39,11 +40,15 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * authorities are supplied directly. The KeycloakUserSyncFilter is mocked so it does
  * not hit the user repository during these authorization tests.
  */
-@WebMvcTest(
-        controllers = UserController.class,
-        properties = "app.cors.allowed-origins=http://localhost:3000"
+@SpringBootTest(
+    properties = {
+        "spring.datasource.password=dummy",
+        "spring.flyway.enabled=false",
+        "spring.jpa.ddl-auto=none"
+    }
 )
-@Import({SecurityConfig.class, KeycloakJwtAuthenticationConverter.class})
+@AutoConfigureMockMvc
+@ActiveProfiles("test")
 class SecurityAuthorizationTest {
 
     @TestConfiguration
@@ -60,12 +65,11 @@ class SecurityAuthorizationTest {
     @Autowired
     private MockMvc mockMvc;
 
-    @MockBean
+    @MockitoBean
     private IUserService userService;
 
-    // Mocked so the filter chain does not sync users against the repository in these tests
-    @MockBean
-    private KeycloakUserSyncFilter keycloakUserSyncFilter;
+    @MockitoBean
+    private CurrentUserService currentUserService;
 
     @Test
     void usersEndpointRequiresAuthentication() throws Exception {
@@ -95,6 +99,7 @@ class SecurityAuthorizationTest {
     @Test
     void updateUserRequiresAuthentication() throws Exception {
         mockMvc.perform(put("/api/users/1")
+                        .with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"email\":\"a@b.com\"}"))
                 .andExpect(status().isUnauthorized());
@@ -102,7 +107,7 @@ class SecurityAuthorizationTest {
 
     @Test
     void disableUserRequiresAuthentication() throws Exception {
-        mockMvc.perform(delete("/api/users/1"))
+        mockMvc.perform(delete("/api/users/1").with(csrf()))
                 .andExpect(status().isUnauthorized());
     }
 
@@ -117,13 +122,17 @@ class SecurityAuthorizationTest {
 
     private static RequestPostProcessor customer() {
         return jwt()
-                .jwt(builder -> builder.subject("kc-customer"))
+                .jwt(builder -> builder
+                        .issuer("http://localhost:8080/realms/test")
+                        .subject("kc-customer"))
                 .authorities(new SimpleGrantedAuthority("ROLE_CUSTOMER"));
     }
 
     private static RequestPostProcessor admin() {
         return jwt()
-                .jwt(builder -> builder.subject("kc-admin"))
+                .jwt(builder -> builder
+                        .issuer("http://localhost:8080/realms/test")
+                        .subject("kc-admin"))
                 .authorities(new SimpleGrantedAuthority("ROLE_ADMIN"));
     }
 }

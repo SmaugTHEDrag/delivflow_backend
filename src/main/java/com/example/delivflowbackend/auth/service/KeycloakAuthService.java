@@ -2,9 +2,7 @@ package com.example.delivflowbackend.auth.service;
 
 import com.example.delivflowbackend.auth.dto.KeycloakTokenResponse;
 import com.example.delivflowbackend.auth.dto.RegisterRequest;
-import com.example.delivflowbackend.auth.dto.TokenResponse;
 import com.example.delivflowbackend.auth.config.KeycloakProperties;
-import com.example.delivflowbackend.common.exception.BadCredentialsException;
 import com.example.delivflowbackend.common.exception.KeycloakIntegrationException;
 import com.example.delivflowbackend.common.exception.UserAlreadyExistsException;
 import com.example.delivflowbackend.common.util.EmailUtils;
@@ -14,7 +12,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
@@ -25,14 +22,15 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Backend-to-Keycloak intermediary. The frontends never talk to Keycloak
- * directly (no redirect flow); they only call /api/auth/*, and this service
- * forwards:
+ * Backend-to-Keycloak intermediary for server-to-server Admin API operations.
+ * The frontends never talk to Keycloak directly; they only call
+ * {@code /api/auth/register}, and this service creates the user in Keycloak
+ * through the Admin API using the backend's confidential service-account
+ * client (client authentication enabled, Direct Access Grants and Implicit
+ * Flow disabled).
  *
- *   login    -> grant_type=password        on the token endpoint
- *   refresh  -> grant_type=refresh_token   on the token endpoint
- *   logout   -> refresh_token hint        on the logout endpoint
- *   register -> Admin API (service account) to create the user
+ * Browser-based user login is handled by Spring Security's OIDC Authorization
+ * Code Flow (session-based), not by this service.
  *
  * Roles are membership-based in DelivFlow (workspace_members.role /
  * project_members.role), so registration does NOT assign any realm role.
@@ -45,8 +43,6 @@ public class KeycloakAuthService {
 
     private static final Logger log = LoggerFactory.getLogger(KeycloakAuthService.class);
 
-    private static final String GRANT_TYPE_PASSWORD = "password";
-    private static final String GRANT_TYPE_REFRESH_TOKEN = "refresh_token";
     private static final String GRANT_TYPE_CLIENT_CREDENTIALS = "client_credentials";
 
     private static final ParameterizedTypeReference<List<Map<String, Object>>> USER_LIST =
@@ -60,52 +56,6 @@ public class KeycloakAuthService {
     public KeycloakAuthService(KeycloakProperties properties, IUserRepository userRepository) {
         this.properties = properties;
         this.userRepository = userRepository;
-    }
-
-    /**
-     * Resource Owner Password Credentials grant. Returns the Keycloak token
-     * response as-is (access token, refresh token, expiry).
-     */
-    public TokenResponse login(String username, String password) {
-        MultiValueMap<String, String> form = grantType(GRANT_TYPE_PASSWORD);
-        form.add("client_id", properties.getClientId());
-        form.add("username", username);
-        form.add("password", password);
-        if (properties.getClientSecret() != null && !properties.getClientSecret().isBlank()) {
-            form.add("client_secret", properties.getClientSecret());
-        }
-        return tokenRequest(form).toTokenResponse();
-    }
-
-    /** Refresh an expired access token with a valid refresh token. */
-    public TokenResponse refresh(String refreshToken) {
-        MultiValueMap<String, String> form = grantType(GRANT_TYPE_REFRESH_TOKEN);
-        form.add("client_id", properties.getClientId());
-        form.add("refresh_token", refreshToken);
-        if (properties.getClientSecret() != null && !properties.getClientSecret().isBlank()) {
-            form.add("client_secret", properties.getClientSecret());
-        }
-        return tokenRequest(form).toTokenResponse();
-    }
-
-    /** Revoke the refresh token at Keycloak. Always answers 200 from the controller. */
-    public void logout(String refreshToken) {
-        MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
-        form.add("client_id", properties.getClientId());
-        form.add("refresh_token", refreshToken);
-        if (properties.getClientSecret() != null && !properties.getClientSecret().isBlank()) {
-            form.add("client_secret", properties.getClientSecret());
-        }
-        try {
-            restClient.post()
-                    .uri(properties.getLogoutEndpoint())
-                    .contentType(MediaType.APPLICATION_FORM_URLENCODED)
-                    .body(form)
-                    .retrieve()
-                    .toBodilessEntity();
-        } catch (RuntimeException ex) {
-            log.error("Keycloak logout failed: {}", ex.getMessage());
-        }
     }
 
     // ------------------------------------------------------------------
@@ -233,35 +183,6 @@ public class KeycloakAuthService {
                     .toBodilessEntity();
         } catch (RuntimeException ex) {
             log.error("Failed to send Keycloak verification email for user '{}': {}", userId, ex.getMessage());
-        }
-    }
-
-    // ------------------------------------------------------------------
-    // Keycloak token endpoint plumbing
-    // ------------------------------------------------------------------
-
-    /** Raw Keycloak response (snake_case) - mapped by the public methods. */
-    private KeycloakTokenResponse tokenRequest(MultiValueMap<String, String> form) {
-        try {
-            return restClient.post()
-                    .uri(properties.getTokenEndpoint())
-                    .contentType(MediaType.APPLICATION_FORM_URLENCODED)
-                    .body(form)
-                    .retrieve()
-                    .body(KeycloakTokenResponse.class);
-        } catch (RestClientResponseException ex) {
-            int status = ex.getStatusCode().value();
-            // 400/401 = bad credentials or invalid refresh token; 403 = direct
-            // access grants disabled. Never forward Keycloak's error body.
-            if (status == 400 || status == 401 || status == 403) {
-                throw new BadCredentialsException("Invalid username or password");
-            }
-            log.error("Keycloak token request failed with status {}: {}",
-                    status, ex.getResponseBodyAsString());
-            throw new KeycloakIntegrationException("Authentication is temporarily unavailable");
-        } catch (RuntimeException ex) {
-            log.error("Keycloak token request failed: {}", ex.getMessage());
-            throw new KeycloakIntegrationException("Authentication is temporarily unavailable", ex);
         }
     }
 

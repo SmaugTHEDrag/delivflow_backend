@@ -2,12 +2,25 @@ package com.example.delivflowbackend;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
-@SpringBootTest
+@SpringBootTest(
+    properties = {
+        "spring.datasource.password=dummy",
+        "spring.flyway.enabled=false",
+        "spring.jpa.ddl-auto=none"
+    }
+)
+@ActiveProfiles("test")
 class DelivflowbackendApplicationTests {
 
-	@Test
-	void contextLoads() {
-	}
+    @MockitoBean
+    private JwtDecoder jwtDecoder;
+
+    @Test
+    void contextLoads() {
+    }
 
 }

@@ -1,11 +1,7 @@
 package com.example.delivflowbackend.auth.dto;
 
-/**
- * The token payload the frontends receive from /api/auth/login and
- * /api/auth/refresh - camelCase, exactly as documented:
- * {accessToken, refreshToken, expiresIn, ...}. Keycloak's snake_case
- * (access_token, refresh_token) is mapped in KeycloakAuthService.
- */
+/** Raw Keycloak token endpoint response (snake_case). Internal to the backend
+ *  only - KeycloakAuthService maps it to the camelCase TokenResponse. */
 public record TokenResponse(
         String accessToken,
         String refreshToken,
