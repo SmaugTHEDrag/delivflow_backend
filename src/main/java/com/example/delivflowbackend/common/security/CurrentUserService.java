@@ -7,9 +7,10 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.core.oidc.user.OidcUser;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 @Component
 @RequiredArgsConstructor
@@ -23,6 +24,21 @@ public class CurrentUserService {
             throw new AccessDeniedException("A valid Keycloak access token is required");
         }
         return requireLocalUser(jwt);
+    }
+
+    @Transactional
+    public User updateCurrentUserProfile(String firstName, String lastName, String avatarUrl) {
+        User user = getCurrentUser();
+        if (firstName != null) {
+            user.setFirstName(firstName.trim());
+        }
+        if (lastName != null) {
+            user.setLastName(lastName.trim());
+        }
+        if (avatarUrl != null) {
+            user.setAvatarUrl(avatarUrl);
+        }
+        return userRepository.save(user);
     }
 
     public User requireLocalUser(Jwt jwt) {

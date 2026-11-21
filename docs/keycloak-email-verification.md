@@ -9,22 +9,23 @@ DelivFlow delegates verification email delivery and action-token creation to Key
 3. **Clients → delivflow-backend → Credentials:** enable the confidential service-account client and set its secret as `KEYCLOAK_BACKEND_CLIENT_SECRET`.
 4. **Clients → delivflow-backend → Service account roles:** assign the `realm-management` client roles `manage-users` and `view-users`. The backend uses these roles to create/delete users and re-fetch their verification state.
 5. **Clients → the configured email-verification client → Settings:** allow the exact redirect URI in `KEYCLOAK_EMAIL_VERIFICATION_REDIRECT_URI` (and the corresponding web origin where required). Do not use a wildcard redirect in production.
-6. Configure an action-token lifetime appropriate for your security policy. The backend supplies `KEYCLOAK_EMAIL_VERIFICATION_LIFESPAN_SECONDS` on each action-email request.
+6. **Realm Settings → Themes → Email Theme:** select `delivflow`.
+7. Configure an action-token lifetime appropriate for your security policy. The backend supplies `KEYCLOAK_EMAIL_VERIFICATION_LIFESPAN_SECONDS` on each action-email request.
 
 The backend sends `PUT /admin/realms/{realm}/users/{id}/execute-actions-email` with the JSON body `["VERIFY_EMAIL"]`, plus `client_id`, `redirect_uri`, and `lifespan` query parameters.
 
 ## Sync and reconciliation
 
-An authenticated caller can request a sync with:
+The verification action redirects to the configured frontend URI. The backend does not trust a frontend verification flag: it re-fetches the Keycloak user through the Admin API before changing the local profile. A signed-in user can request a retry for their own Keycloak identity with:
 
 ```text
 PUT /api/auth/email-verification/sync/{keycloakUserId}
 Authorization: Bearer <valid Keycloak access token>
 ```
 
-The request contains no verification claim. The backend fetches the user from the Admin API and changes the local profile only when Keycloak reports `emailVerified=true`. The scheduled reconciliation uses that same method for pending profiles, covering missed sync requests.
+The path identity must match the subject in the caller's validated Keycloak access token. The backend changes the local profile only when the Admin API reports `emailVerified=true`; repeated syncs are safe. Pending-account login uses the same Admin API check before activating the local profile. A scheduled reconciliation retries pending profiles every five minutes by default, covering missed requests and verification links that have expired. Resending verification uses Keycloak's built-in `VERIFY_EMAIL` action.
 
-No Keycloak Event Listener SPI is bundled with this backend, so no listener registration is required for correctness. If an external listener is deployed to reduce sync latency, install its provider in Keycloak and register it under **Realm Settings → Events → Event listeners**; it should call the authenticated sync endpoint and must not send a trusted verification boolean.
+No Keycloak Event Listener SPI or custom callback state is required. Keycloak remains responsible for creating and validating verification links; Spring Boot does not send email or issue verification tokens.
 
 ## Backend environment variables
 

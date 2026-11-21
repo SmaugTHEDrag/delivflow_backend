@@ -88,9 +88,42 @@ class CurrentUserServiceTest {
     }
 
     @Test
+    void updateCurrentUserProfileChangesOnlyEditableFieldsOfAuthenticatedUser() {
+        Jwt jwt = token("subject-from-token", true);
+        User user = activeUser("subject-from-token");
+        user.setFirstName("Current");
+        user.setLastName("User");
+        user.setAvatarUrl("old-avatar");
+        SecurityContextHolder.getContext().setAuthentication(
+                new JwtAuthenticationToken(jwt, List.of(), "different-principal-name"));
+        when(userRepository.findByKeycloakId("subject-from-token")).thenReturn(Optional.of(user));
+        when(userRepository.save(user)).thenReturn(user);
+
+        User updated = currentUserService.updateCurrentUserProfile("  New name  ", null, "new-avatar");
+
+        assertThat(updated).isSameAs(user);
+        assertThat(user.getFirstName()).isEqualTo("New name");
+        assertThat(user.getLastName()).isEqualTo("User");
+        assertThat(user.getAvatarUrl()).isEqualTo("new-avatar");
+        assertThat(user.getKeycloakId()).isEqualTo("subject-from-token");
+        assertThat(user.getUsername()).isEqualTo("user");
+        assertThat(user.getEmail()).isEqualTo("user@example.com");
+        verify(userRepository).findByKeycloakId("subject-from-token");
+        verify(userRepository).save(user);
+        verify(userRepository, never()).findById(any());
+    }
+
+    @Test
     void missingAuthenticationIsRejected() {
         assertThatThrownBy(() -> currentUserService.getCurrentUser())
                 .isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test
+    void updateCurrentUserProfileRequiresAuthentication() {
+        assertThatThrownBy(() -> currentUserService.updateCurrentUserProfile("Name", null, null))
+                .isInstanceOf(AccessDeniedException.class);
+        verifyNoInteractions(userRepository);
     }
 
     private Jwt token(String subject, boolean emailVerified) {

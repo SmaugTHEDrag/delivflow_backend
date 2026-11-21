@@ -222,6 +222,49 @@ class AuthServiceLoginTest {
     }
 
     @Test
+    void pendingUserIsActivatedForLoginOnlyAfterAdminApiConfirmsVerification() {
+        User pending = pendingUser();
+        when(userRepository.findByEmail(pending.getEmail())).thenReturn(Optional.of(pending));
+        when(userRepository.findByKeycloakId(SUBJECT)).thenReturn(Optional.of(pending));
+        when(rateLimiter.checkLoginRate(pending.getEmail())).thenReturn(true);
+        when(keycloakAuthService.authenticateUserPassword("thainguyen", "StrongPassword123!"))
+                .thenReturn(tokens("access-value", "refresh-value"));
+        when(keycloakAuthService.getIdentityFromAccessToken("access-value"))
+                .thenReturn(new KeycloakAuthService.AuthenticatedIdentity(ISSUER, SUBJECT, true));
+        when(keycloakAuthService.isEmailVerifiedInKeycloak(SUBJECT)).thenReturn(true);
+
+        ResponseEntity<?> result = authService.login(
+                new LoginRequest(pending.getEmail(), "StrongPassword123!"));
+
+        assertThat(result.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(pending.getEmailVerified()).isTrue();
+        assertThat(pending.getStatus()).isEqualTo(UserStatus.ACTIVE);
+        verify(keycloakAuthService).isEmailVerifiedInKeycloak(SUBJECT);
+    }
+
+    @Test
+    void adminApiFailureDoesNotActivatePendingUserDuringLogin() {
+        User pending = pendingUser();
+        when(userRepository.findByEmail(pending.getEmail())).thenReturn(Optional.of(pending));
+        when(userRepository.findByKeycloakId(SUBJECT)).thenReturn(Optional.of(pending));
+        when(rateLimiter.checkLoginRate(pending.getEmail())).thenReturn(true);
+        when(keycloakAuthService.authenticateUserPassword("thainguyen", "StrongPassword123!"))
+                .thenReturn(tokens("access-value", "refresh-value"));
+        when(keycloakAuthService.getIdentityFromAccessToken("access-value"))
+                .thenReturn(new KeycloakAuthService.AuthenticatedIdentity(ISSUER, SUBJECT, true));
+        when(keycloakAuthService.isEmailVerifiedInKeycloak(SUBJECT))
+                .thenThrow(new KeycloakIntegrationException("Keycloak unavailable"));
+
+        ResponseEntity<?> result = authService.login(
+                new LoginRequest(pending.getEmail(), "StrongPassword123!"));
+
+        assertThat(result.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(pending.getEmailVerified()).isFalse();
+        assertThat(pending.getStatus()).isEqualTo(UserStatus.PENDING_VERIFICATION);
+        verify(userRepository, never()).save(any(User.class));
+    }
+
+    @Test
     void registrationReportsKeycloakDuplicateConflict() {
         when(userRepository.findByEmail("thai@example.com")).thenReturn(Optional.empty());
         when(userRepository.findByUsernameIgnoreCase("thainguyen")).thenReturn(Optional.empty());

@@ -55,6 +55,14 @@ passwords or tokens.
    access token. A Keycloak service outage returns an error rather than claiming
    that revocation succeeded, but the cookie is still cleared.
 
+## User profile
+
+Use the authenticated user's `GET /api/me` endpoint to read the local profile.
+Update editable profile fields with `PATCH /api/me`, sending any subset of
+`firstName`, `lastName`, and `avatarUrl`. Omitted fields remain unchanged.
+Username, email, password, and email verification are managed by Keycloak and
+cannot be changed through this profile endpoint.
+
 ## CSRF, cookies, and CORS
 
 Refresh and logout are cookie-authenticated and require CSRF protection. First

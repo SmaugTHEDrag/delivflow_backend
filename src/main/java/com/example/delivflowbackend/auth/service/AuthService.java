@@ -237,8 +237,15 @@ public class AuthService {
                 return unauthorized("Invalid email or password");
             }
 
-            user.setEmailVerified(true);
-            user.setStatus(UserStatus.ACTIVE);
+            if (user.getStatus() == UserStatus.PENDING_VERIFICATION
+                    || !Boolean.TRUE.equals(user.getEmailVerified())) {
+                if (!synchronizeEmailVerification(user.getKeycloakId())) {
+                    return unauthorized("Invalid email or password");
+                }
+            }
+            if (user.getStatus() != UserStatus.ACTIVE || !Boolean.TRUE.equals(user.getEmailVerified())) {
+                return unauthorized("Invalid email or password");
+            }
             user.setLastLoginAt(Instant.now());
             userRepository.save(user);
             rateLimiter.resetLoginRate(email);

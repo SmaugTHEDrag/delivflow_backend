@@ -11,6 +11,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.web.csrf.CsrfToken;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import jakarta.servlet.http.HttpServletRequest;
@@ -46,8 +47,15 @@ public class AuthController {
     }
 
     @Operation(summary = "Synchronize a verified Keycloak email into the local profile")
+    @SecurityRequirement(name = "bearerAuth")
     @PutMapping("/email-verification/sync/{keycloakId}")
-    public ResponseEntity<Void> synchronizeEmailVerification(@PathVariable String keycloakId) {
+    public ResponseEntity<Void> synchronizeEmailVerification(
+            @PathVariable String keycloakId,
+            Authentication authentication) {
+        if (authentication == null || !(authentication.getPrincipal() instanceof Jwt jwt)
+                || !keycloakId.equals(jwt.getSubject())) {
+            return ResponseEntity.status(403).build();
+        }
         return authService.synchronizeEmailVerification(keycloakId)
                 ? ResponseEntity.noContent().build()
                 : ResponseEntity.accepted().build();
@@ -76,7 +84,8 @@ public class AuthController {
         return new CsrfTokenResponse(csrfToken.getToken(), csrfToken.getHeaderName());
     }
 
-    @Operation(summary = "Get current authenticated user profile")
+    @Deprecated(since = "2026-11", forRemoval = false)
+    @Operation(summary = "Get current authenticated user profile", deprecated = true)
     @SecurityRequirement(name = "bearerAuth")
     @GetMapping("/me")
     public ResponseEntity<?> me(Authentication authentication) {
