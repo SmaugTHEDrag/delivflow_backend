@@ -82,6 +82,21 @@ and on an eligible `401` attempt one refresh with credentials and the CSRF
 header before retrying the original request once. Do not persist the refresh
 token or attempt to read it from JavaScript.
 
+## Login throttling
+
+Login requests are throttled per client IP (30 attempts per 15 minutes) and per
+IP/email pair (5 attempts per 30 minutes). A successful login clears only the
+pair-specific counter; it does not clear the client-IP counter. The backend
+uses the servlet connection's remote address and does not trust a
+client-supplied forwarding header.
+
+The limiter is in-memory, instance-local, and bounded to 10,000 active keys;
+expired entries are cleaned periodically. When the store is full, requests
+that need new tracking keys are throttled until expired entries are cleaned;
+active counters are not evicted. It is not a distributed limiter. Configure
+trusted-proxy address forwarding and edge-level rate limiting in multi-instance
+deployments.
+
 ## JWT validation and Keycloak setup
 
 Spring Security validates the JWT signature using Keycloak's JWKS, issuer, and

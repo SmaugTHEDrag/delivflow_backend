@@ -23,6 +23,7 @@ import org.springframework.test.context.ActiveProfiles;
 
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
@@ -68,7 +69,8 @@ class SecurityAuthorizationTest {
 
     @Test
     void registerDoesNotRequireAuthenticationOrCsrfToken() throws Exception {
-        when(authService.register(any(RegisterRequest.class))).thenReturn(ResponseEntity.status(201).build());
+        when(authService.register(any(RegisterRequest.class), anyString()))
+                .thenReturn(ResponseEntity.status(201).build());
 
         mockMvc.perform(post("/api/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -94,7 +96,7 @@ class SecurityAuthorizationTest {
                                 .toTokenResponse(),
                         UserResponse.builder().email("person@example.com").username("person")
                                 .firstName("Person").lastName("User").build()));
-        org.mockito.Mockito.doReturn(loginResponse).when(authService).login(any(LoginRequest.class));
+        org.mockito.Mockito.doReturn(loginResponse).when(authService).login(any(LoginRequest.class), anyString());
 
         mockMvc.perform(post("/api/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -177,8 +179,7 @@ class SecurityAuthorizationTest {
                         .with(jwt().jwt(token -> token.subject("current-subject")))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"firstName\":\"Updated\",\"lastName\":\"Name\","
-                                + "\"avatarUrl\":\"https://example.com/avatar.png\","
-                                + "\"username\":\"changed-user\",\"email\":\"changed@example.com\"}"))
+                                + "\"avatarUrl\":\"https://example.com/avatar.png\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.username").value("original-user"))
                 .andExpect(jsonPath("$.email").value("original@example.com"))
@@ -186,6 +187,63 @@ class SecurityAuthorizationTest {
                 .andExpect(jsonPath("$.lastName").value("Name"));
         org.mockito.Mockito.verify(currentUserService).updateCurrentUserProfile(
                 "Updated", "Name", "https://example.com/avatar.png");
+    }
+
+    @Test
+    void currentUserProfileRejectsProtectedIdentityFields() throws Exception {
+        mockMvc.perform(patch("/api/me")
+                        .with(jwt().jwt(token -> token.subject("current-subject")))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"changed@example.com\"}"))
+                .andExpect(status().isBadRequest());
+
+        mockMvc.perform(patch("/api/me")
+                        .with(jwt().jwt(token -> token.subject("current-subject")))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"changed-user\"}"))
+                .andExpect(status().isBadRequest());
+
+        mockMvc.perform(patch("/api/me")
+                        .with(jwt().jwt(token -> token.subject("current-subject")))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"keycloakId\":\"other-user\"}"))
+                .andExpect(status().isBadRequest());
+
+        mockMvc.perform(patch("/api/me")
+                        .with(jwt().jwt(token -> token.subject("current-subject")))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"id\":\"other-user\"}"))
+                .andExpect(status().isBadRequest());
+
+        mockMvc.perform(patch("/api/me")
+                        .with(jwt().jwt(token -> token.subject("current-subject")))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"DISABLED\"}"))
+                .andExpect(status().isBadRequest());
+
+        org.mockito.Mockito.verify(currentUserService, org.mockito.Mockito.never())
+                .updateCurrentUserProfile(any(), any(), any());
+    }
+
+    @Test
+    void currentUserProfileRejectsUnknownFields() throws Exception {
+        mockMvc.perform(patch("/api/me")
+                        .with(jwt().jwt(token -> token.subject("current-subject")))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"displayName\":\"unsupported\"}"))
+                .andExpect(status().isBadRequest());
+
+        org.mockito.Mockito.verify(currentUserService, org.mockito.Mockito.never())
+                .updateCurrentUserProfile(any(), any(), any());
+    }
+
+    @Test
+    void currentUserProfileRejectsNullJsonBody() throws Exception {
+        mockMvc.perform(patch("/api/me")
+                        .with(jwt().jwt(token -> token.subject("current-subject")))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("null"))
+                .andExpect(status().isBadRequest());
     }
 
     @Test
@@ -222,14 +280,36 @@ class SecurityAuthorizationTest {
     }
 
     @Test
+    void removedAuthMeEndpointReturnsNotFoundWhileCanonicalProfileRemainsAvailable() throws Exception {
+        User user = new User();
+        user.setKeycloakId("current-subject");
+        user.setUsername("original-user");
+        user.setEmail("original@example.com");
+        user.setEmailVerified(true);
+        when(currentUserService.getCurrentUser()).thenReturn(user);
+
+        mockMvc.perform(get("/api/auth/me")
+                        .with(jwt().jwt(token -> token.subject("current-subject"))))
+                .andExpect(status().isNotFound());
+
+        mockMvc.perform(get("/api/me")
+                        .with(jwt().jwt(token -> token.subject("current-subject"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sub").value("current-subject"));
+    }
+
+    @Test
     void swaggerDoesNotRequireBearerTokenForRegister() throws Exception {
         mockMvc.perform(get("/v3/api-docs"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.paths['/api/auth/register'].post.security").doesNotExist())
                 .andExpect(jsonPath("$.paths['/api/users']").doesNotExist())
-                .andExpect(jsonPath("$.paths['/api/auth/me'].get.deprecated").value(true))
+                .andExpect(jsonPath("$.paths['/api/auth/me']").doesNotExist())
                 .andExpect(jsonPath("$.paths['/api/me'].get.security[0].bearerAuth").exists())
-                .andExpect(jsonPath("$.paths['/api/me'].patch.security[0].bearerAuth").exists());
+                .andExpect(jsonPath("$.paths['/api/me'].patch.security[0].bearerAuth").exists())
+                .andExpect(jsonPath("$.components.schemas.UpdateMyProfileRequest.properties.firstName").exists())
+                .andExpect(jsonPath("$.components.schemas.UpdateMyProfileRequest.properties.lastName").exists())
+                .andExpect(jsonPath("$.components.schemas.UpdateMyProfileRequest.properties.avatarUrl").exists());
     }
 
 }

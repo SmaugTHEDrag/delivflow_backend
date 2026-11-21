@@ -12,6 +12,7 @@ public class RegisterRequest {
 
     @NotBlank(message = "Email is required")
     @Email(message = "Email must be valid")
+    @Size(max = 320, message = "Email must not be longer than 320 characters")
     private String email;
 
     @NotBlank(message = "Username is required")

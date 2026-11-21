@@ -27,6 +27,26 @@ The path identity must match the subject in the caller's validated Keycloak acce
 
 No Keycloak Event Listener SPI or custom callback state is required. Keycloak remains responsible for creating and validating verification links; Spring Boot does not send email or issue verification tokens.
 
+## Resend throttling and response privacy
+
+`POST /api/auth/resend-verification` returns the same HTTP 200 response for
+unknown, already-verified, and pending email addresses. Only a pending local
+profile causes the backend to ask Keycloak to send a verification email. The
+response is an acknowledgement, not confirmation that an email was sent; a
+Keycloak delivery failure is logged and is not exposed in the response.
+
+Resend requests and retries for a pending registration are limited to 10 per
+client IP per 10 minutes and 3 per normalized email address per hour. A new
+registration still requests its initial verification email as part of the
+existing registration flow. The in-memory limiter is
+instance-local, bounded to 10,000 active keys, and periodically removes
+expired entries. When full, it throttles requests requiring new tracking keys
+until expired entries are cleaned; active counters are not evicted. It does
+not coordinate across backend instances, so configure trusted-proxy
+address forwarding and edge-level throttling when scaling out. The backend
+uses the servlet connection's remote address and does not trust
+client-supplied forwarding headers.
+
 ## Backend environment variables
 
 | Variable | Purpose |

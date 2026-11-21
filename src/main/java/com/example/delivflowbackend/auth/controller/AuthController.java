@@ -36,14 +36,18 @@ public class AuthController {
 
     @Operation(summary = "Register a new customer account")
     @PostMapping("/register")
-    public ResponseEntity<?> register(@Valid @RequestBody RegisterRequest request) {
-        return authService.register(request);
+    public ResponseEntity<?> register(
+            @Valid @RequestBody RegisterRequest request,
+            HttpServletRequest servletRequest) {
+        return authService.register(request, servletRequest.getRemoteAddr());
     }
 
     @Operation(summary = "Resend the Keycloak email-verification link")
     @PostMapping("/resend-verification")
-    public ResponseEntity<?> resendVerification(@RequestParam String email) {
-        return authService.resendVerification(email);
+    public ResponseEntity<?> resendVerification(
+            @RequestParam String email,
+            HttpServletRequest servletRequest) {
+        return authService.resendVerification(email, servletRequest.getRemoteAddr());
     }
 
     @Operation(summary = "Synchronize a verified Keycloak email into the local profile")
@@ -63,8 +67,10 @@ public class AuthController {
 
     @Operation(summary = "Login with email and password")
     @PostMapping("/login")
-    public ResponseEntity<?> login(@Valid @RequestBody LoginRequest request) {
-        return authService.login(request);
+    public ResponseEntity<?> login(
+            @Valid @RequestBody LoginRequest request,
+            HttpServletRequest servletRequest) {
+        return authService.login(request, servletRequest.getRemoteAddr());
     }
 
     @Operation(summary = "Exchange the refresh-token cookie for a new access token")
@@ -82,14 +88,6 @@ public class AuthController {
             HttpServletResponse response) {
         csrfTokenRepository.saveToken(csrfToken, request, response);
         return new CsrfTokenResponse(csrfToken.getToken(), csrfToken.getHeaderName());
-    }
-
-    @Deprecated(since = "2026-11", forRemoval = false)
-    @Operation(summary = "Get current authenticated user profile", deprecated = true)
-    @SecurityRequirement(name = "bearerAuth")
-    @GetMapping("/me")
-    public ResponseEntity<?> me(Authentication authentication) {
-        return authService.me(authentication);
     }
 
     @Operation(summary = "Revoke the refresh token and clear its cookie")
