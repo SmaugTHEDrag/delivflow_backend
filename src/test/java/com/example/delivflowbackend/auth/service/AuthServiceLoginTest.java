@@ -215,6 +215,37 @@ class AuthServiceLoginTest {
     }
 
     @Test
+    void resendVerificationDoesNotSendWhenKeycloakAlreadyVerified() {
+        User pending = pendingUser();
+        when(userRepository.findByEmail(pending.getEmail())).thenReturn(Optional.of(pending));
+        when(keycloakAuthService.isEmailVerifiedInKeycloak(SUBJECT)).thenReturn(true);
+        when(userRepository.findByKeycloakId(SUBJECT)).thenReturn(Optional.of(pending));
+
+        ResponseEntity<?> response = authService.resendVerification(pending.getEmail());
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(pending.getEmailVerified()).isTrue();
+        assertThat(pending.getStatus()).isEqualTo(UserStatus.ACTIVE);
+        verify(userRepository).save(pending);
+        verify(keycloakAuthService, never()).sendVerificationEmail(SUBJECT);
+    }
+
+    @Test
+    void resendVerificationIsGenericWhenKeycloakStateLookupFails() {
+        User pending = pendingUser();
+        when(userRepository.findByEmail(pending.getEmail())).thenReturn(Optional.of(pending));
+        when(keycloakAuthService.isEmailVerifiedInKeycloak(SUBJECT))
+                .thenThrow(new KeycloakIntegrationException("Keycloak unavailable"));
+
+        ResponseEntity<?> response = authService.resendVerification(pending.getEmail());
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(((AuthResponse) response.getBody()).message())
+                .isEqualTo("If the account exists and requires verification, a verification email may be sent.");
+        verify(keycloakAuthService, never()).sendVerificationEmail(SUBJECT);
+    }
+
+    @Test
     void registrationRetryForPendingUserIsThrottled() {
         User pending = pendingUser();
         when(userRepository.findByEmail(pending.getEmail())).thenReturn(Optional.of(pending));
@@ -312,7 +343,6 @@ class AuthServiceLoginTest {
     void adminApiFailureDoesNotActivatePendingUserDuringLogin() {
         User pending = pendingUser();
         when(userRepository.findByEmail(pending.getEmail())).thenReturn(Optional.of(pending));
-        when(userRepository.findByKeycloakId(SUBJECT)).thenReturn(Optional.of(pending));
         when(rateLimiter.checkLoginRate(pending.getEmail(), "unknown")).thenReturn(true);
         when(keycloakAuthService.authenticateUserPassword("thainguyen", "StrongPassword123!"))
                 .thenReturn(tokens("access-value", "refresh-value"));

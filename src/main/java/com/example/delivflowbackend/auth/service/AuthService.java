@@ -95,7 +95,11 @@ public class AuthService {
                 if (!rateLimiter.checkVerificationResendRate(email, remoteAddress)) {
                     return verificationResendAcknowledgement();
                 }
-                return sendVerificationEmail(existing);
+                if (!canSendVerificationEmail(existing)) {
+                    return verificationResendAcknowledgement();
+                }
+                sendVerificationEmail(existing);
+                return verificationResendAcknowledgement();
             }
             return ResponseEntity.status(HttpStatus.CONFLICT)
                     .body(AuthResponse.failure("The username or email is already in use"));
@@ -163,8 +167,23 @@ public class AuthService {
                 || Boolean.TRUE.equals(user.getEmailVerified()) || user.getKeycloakId() == null) {
             return verificationResendAcknowledgement();
         }
-        sendVerificationEmail(user);
+        if (canSendVerificationEmail(user)) {
+            sendVerificationEmail(user);
+        }
         return verificationResendAcknowledgement();
+    }
+
+    private boolean canSendVerificationEmail(User user) {
+        try {
+            if (keycloakAuthService.isEmailVerifiedInKeycloak(user.getKeycloakId())) {
+                synchronizeEmailVerification(user.getKeycloakId(), true);
+                return false;
+            }
+            return true;
+        } catch (KeycloakIntegrationException ex) {
+            log.warn("Could not verify current Keycloak email state for user {}", user.getKeycloakId());
+            return false;
+        }
     }
 
     private ResponseEntity<?> verificationResendAcknowledgement() {
@@ -186,10 +205,15 @@ public class AuthService {
 
     @Transactional
     public boolean synchronizeEmailVerification(String keycloakId) {
+        return synchronizeEmailVerification(
+                keycloakId, keycloakAuthService.isEmailVerifiedInKeycloak(keycloakId));
+    }
+
+    private boolean synchronizeEmailVerification(String keycloakId, boolean keycloakVerified) {
         User user = userRepository.findByKeycloakId(keycloakId)
                 .orElseThrow(() -> new com.example.delivflowbackend.common.exception.UserNotFoundException(
                         "No local profile exists for this identity"));
-        if (!keycloakAuthService.isEmailVerifiedInKeycloak(keycloakId)) {
+        if (!keycloakVerified) {
             return false;
         }
 

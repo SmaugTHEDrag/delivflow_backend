@@ -37,6 +37,7 @@ public class CurrentUserController {
     private final CurrentUserService currentUserService;
     private final Validator validator;
 
+    @Operation(summary = "Read the authenticated user's profile")
     @GetMapping
     public UserInfoDto currentUser() {
         return toProfile(currentUserService.getCurrentUser());
