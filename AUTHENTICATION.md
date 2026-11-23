@@ -104,6 +104,8 @@ expiration. Set `KEYCLOAK_EXPECTED_AUDIENCES` to a comma-separated audience
 allowlist when the realm/client is configured to issue an API audience; when
 set, tokens without a matching audience are rejected. Realm roles map to
 `ROLE_*` authorities and existing method-level authorization remains enforced.
+The default allowlist is `delivflow-backend`; configure it explicitly when the
+API uses a different Keycloak audience.
 The JWT subject must match the local `keycloakId`, and the account must be
 active and verified.
 
@@ -115,6 +117,18 @@ The client secret stays on the backend and must never be exposed to React.
 
 This repository contains the backend only; React integration is described above
 but no frontend source is present to modify.
+
+## Google social login
+
+Google authentication is implemented only as a Keycloak identity provider. The
+frontend redirects to Keycloak, Keycloak authenticates and links the Google
+identity, and the frontend sends the resulting Keycloak access token to Spring
+Boot. Spring Boot never receives or validates Google access tokens.
+
+Configure a Google identity provider in the same Keycloak realm, exact HTTPS
+callback/redirect URIs, and email as a required claim. Account linking must
+require an existing Keycloak account or an explicitly approved first-broker
+flow; DelivFlow does not merge users solely by matching email.
 
 ## Profile migration
 
