@@ -6,12 +6,8 @@ import com.example.delivflowbackend.auth.dto.KeycloakTokenResponse;
 import com.example.delivflowbackend.auth.dto.LoginRequest;
 import com.example.delivflowbackend.auth.dto.UserResponse;
 import com.example.delivflowbackend.auth.service.AuthService;
-import com.example.delivflowbackend.common.exception.ResourceNotFoundException;
 import com.example.delivflowbackend.common.security.CurrentUserService;
-import com.example.delivflowbackend.user.controller.UserController;
-import com.example.delivflowbackend.user.dto.UserPageResponse;
 import com.example.delivflowbackend.user.entity.User;
-import com.example.delivflowbackend.user.service.IUserService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -19,35 +15,28 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.jwt.BadJwtException;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.MvcResult;
-import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.ActiveProfiles;
 
-import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Authorization behaviour of the resource server:
- * 401 without a token, 403 for a role that is not allowed, public reads stay open.
- *
- * The realm-role -> ROLE_* mapping itself is covered by converter logic; here the
- * authorities are supplied directly. The KeycloakUserSyncFilter is mocked so it does
- * not hit the user repository during these authorization tests.
+ * Authorization behavior of the resource server and authenticated profile routes.
+ * The KeycloakUserSyncFilter is mocked so tests do not hit the user repository.
  */
 @SpringBootTest(
     properties = {
@@ -62,9 +51,6 @@ class SecurityAuthorizationTest {
 
     @Autowired
     private MockMvc mockMvc;
-
-    @MockitoBean
-    private IUserService userService;
 
     @MockitoBean
     private AuthService authService;
@@ -83,7 +69,8 @@ class SecurityAuthorizationTest {
 
     @Test
     void registerDoesNotRequireAuthenticationOrCsrfToken() throws Exception {
-        when(authService.register(any(RegisterRequest.class))).thenReturn(ResponseEntity.status(201).build());
+        when(authService.register(any(RegisterRequest.class), anyString()))
+                .thenReturn(ResponseEntity.status(201).build());
 
         mockMvc.perform(post("/api/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -109,7 +96,7 @@ class SecurityAuthorizationTest {
                                 .toTokenResponse(),
                         UserResponse.builder().email("person@example.com").username("person")
                                 .firstName("Person").lastName("User").build()));
-        org.mockito.Mockito.doReturn(loginResponse).when(authService).login(any(LoginRequest.class));
+        org.mockito.Mockito.doReturn(loginResponse).when(authService).login(any(LoginRequest.class), anyString());
 
         mockMvc.perform(post("/api/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -150,6 +137,115 @@ class SecurityAuthorizationTest {
                 .andExpect(status().isUnauthorized());
     }
 
+        @Test
+        void verificationSyncCannotTargetAnotherKeycloakUser() throws Exception {
+                mockMvc.perform(put("/api/auth/email-verification/sync/another-user")
+                                                .with(jwt().jwt(token -> token.subject("caller-user"))))
+                                .andExpect(status().isForbidden());
+        }
+
+    @Test
+    void currentUserProfileReadAndUpdateRequireAuthentication() throws Exception {
+        mockMvc.perform(get("/api/me"))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(patch("/api/me")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"firstName\":\"New\"}"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void currentUserCanReadAndUpdateOnlyEditableProfileFields() throws Exception {
+        User user = new User();
+        user.setKeycloakId("current-subject");
+        user.setUsername("original-user");
+        user.setEmail("original@example.com");
+        user.setEmailVerified(true);
+        user.setFirstName("Updated");
+        user.setLastName("Name");
+        user.setAvatarUrl("https://example.com/avatar.png");
+        when(currentUserService.getCurrentUser()).thenReturn(user);
+        when(currentUserService.updateCurrentUserProfile(
+                "Updated", "Name", "https://example.com/avatar.png")).thenReturn(user);
+
+        mockMvc.perform(get("/api/me").with(jwt().jwt(token -> token.subject("current-subject"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sub").value("current-subject"))
+                .andExpect(jsonPath("$.firstName").value("Updated"))
+                .andExpect(jsonPath("$.lastName").value("Name"))
+                .andExpect(jsonPath("$.avatarUrl").value("https://example.com/avatar.png"));
+
+        mockMvc.perform(patch("/api/me")
+                        .with(jwt().jwt(token -> token.subject("current-subject")))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"firstName\":\"Updated\",\"lastName\":\"Name\","
+                                + "\"avatarUrl\":\"https://example.com/avatar.png\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.username").value("original-user"))
+                .andExpect(jsonPath("$.email").value("original@example.com"))
+                .andExpect(jsonPath("$.firstName").value("Updated"))
+                .andExpect(jsonPath("$.lastName").value("Name"));
+        org.mockito.Mockito.verify(currentUserService).updateCurrentUserProfile(
+                "Updated", "Name", "https://example.com/avatar.png");
+    }
+
+    @Test
+    void currentUserProfileRejectsProtectedIdentityFields() throws Exception {
+        mockMvc.perform(patch("/api/me")
+                        .with(jwt().jwt(token -> token.subject("current-subject")))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"changed@example.com\"}"))
+                .andExpect(status().isBadRequest());
+
+        mockMvc.perform(patch("/api/me")
+                        .with(jwt().jwt(token -> token.subject("current-subject")))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"changed-user\"}"))
+                .andExpect(status().isBadRequest());
+
+        mockMvc.perform(patch("/api/me")
+                        .with(jwt().jwt(token -> token.subject("current-subject")))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"keycloakId\":\"other-user\"}"))
+                .andExpect(status().isBadRequest());
+
+        mockMvc.perform(patch("/api/me")
+                        .with(jwt().jwt(token -> token.subject("current-subject")))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"id\":\"other-user\"}"))
+                .andExpect(status().isBadRequest());
+
+        mockMvc.perform(patch("/api/me")
+                        .with(jwt().jwt(token -> token.subject("current-subject")))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"DISABLED\"}"))
+                .andExpect(status().isBadRequest());
+
+        org.mockito.Mockito.verify(currentUserService, org.mockito.Mockito.never())
+                .updateCurrentUserProfile(any(), any(), any());
+    }
+
+    @Test
+    void currentUserProfileRejectsUnknownFields() throws Exception {
+        mockMvc.perform(patch("/api/me")
+                        .with(jwt().jwt(token -> token.subject("current-subject")))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"displayName\":\"unsupported\"}"))
+                .andExpect(status().isBadRequest());
+
+        org.mockito.Mockito.verify(currentUserService, org.mockito.Mockito.never())
+                .updateCurrentUserProfile(any(), any(), any());
+    }
+
+    @Test
+    void currentUserProfileRejectsNullJsonBody() throws Exception {
+        mockMvc.perform(patch("/api/me")
+                        .with(jwt().jwt(token -> token.subject("current-subject")))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("null"))
+                .andExpect(status().isBadRequest());
+    }
+
     @Test
     void refreshReadsHttpOnlyCookieAndReturnsRotatedCookieWithCsrf() throws Exception {
         ResponseEntity<?> refreshResponse = ResponseEntity.ok()
@@ -171,16 +267,35 @@ class SecurityAuthorizationTest {
 
     @Test
     void invalidJwtIsRejectedByResourceServer() throws Exception {
-        mockMvc.perform(get("/api/users")
+        mockMvc.perform(get("/api/me")
                         .header("Authorization", "Bearer invalid-token"))
                 .andExpect(status().isUnauthorized());
     }
 
     @Test
     void expiredAccessTokenIsRejectedByResourceServer() throws Exception {
-        mockMvc.perform(get("/api/users")
+        mockMvc.perform(get("/api/me")
                         .header("Authorization", "Bearer expired-token"))
                 .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void removedAuthMeEndpointReturnsNotFoundWhileCanonicalProfileRemainsAvailable() throws Exception {
+        User user = new User();
+        user.setKeycloakId("current-subject");
+        user.setUsername("original-user");
+        user.setEmail("original@example.com");
+        user.setEmailVerified(true);
+        when(currentUserService.getCurrentUser()).thenReturn(user);
+
+        mockMvc.perform(get("/api/auth/me")
+                        .with(jwt().jwt(token -> token.subject("current-subject"))))
+                .andExpect(status().isNotFound());
+
+        mockMvc.perform(get("/api/me")
+                        .with(jwt().jwt(token -> token.subject("current-subject"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sub").value("current-subject"));
     }
 
     @Test
@@ -188,71 +303,13 @@ class SecurityAuthorizationTest {
         mockMvc.perform(get("/v3/api-docs"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.paths['/api/auth/register'].post.security").doesNotExist())
-                .andExpect(jsonPath("$.paths['/api/users'].get.security[0].bearerAuth").exists());
+                .andExpect(jsonPath("$.paths['/api/users']").doesNotExist())
+                .andExpect(jsonPath("$.paths['/api/auth/me']").doesNotExist())
+                .andExpect(jsonPath("$.paths['/api/me'].get.security[0].bearerAuth").exists())
+                .andExpect(jsonPath("$.paths['/api/me'].patch.security[0].bearerAuth").exists())
+                .andExpect(jsonPath("$.components.schemas.UpdateMyProfileRequest.properties.firstName").exists())
+                .andExpect(jsonPath("$.components.schemas.UpdateMyProfileRequest.properties.lastName").exists())
+                .andExpect(jsonPath("$.components.schemas.UpdateMyProfileRequest.properties.avatarUrl").exists());
     }
 
-    @Test
-    void usersEndpointRequiresAuthentication() throws Exception {
-        mockMvc.perform(get("/api/users"))
-                .andExpect(status().isUnauthorized());
-    }
-
-    @Test
-    void usersEndpointRequiresAdminRole() throws Exception {
-        mockMvc.perform(get("/api/users").with(customer()))
-                .andExpect(status().isForbidden());
-    }
-
-    @Test
-    void adminCanCallUsersEndpoint() throws Exception {
-        when(userService.getAllUsers(any(), any())).thenReturn(new UserPageResponse());
-        mockMvc.perform(get("/api/users").with(admin()))
-                .andExpect(status().isOk());
-    }
-
-    @Test
-    void userByIdRequiresAuthentication() throws Exception {
-        mockMvc.perform(get("/api/users/1"))
-                .andExpect(status().isUnauthorized());
-    }
-
-    @Test
-    void updateUserRequiresAuthentication() throws Exception {
-        mockMvc.perform(put("/api/users/1")
-                        .with(csrf())
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"email\":\"a@b.com\"}"))
-                .andExpect(status().isUnauthorized());
-    }
-
-    @Test
-    void disableUserRequiresAuthentication() throws Exception {
-        mockMvc.perform(delete("/api/users/1").with(csrf()))
-                .andExpect(status().isUnauthorized());
-    }
-
-    @Test
-    void missingResourceReturnsConsistentErrorBody() throws Exception {
-        UUID unknownId = UUID.fromString("11111111-1111-1111-1111-111111111111");
-        when(userService.getUserById(unknownId)).thenThrow(new ResourceNotFoundException("User not found"));
-        mockMvc.perform(get("/api/users/{id}", unknownId).with(admin()))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.message").value("User not found"));
-    }
-
-    private static RequestPostProcessor customer() {
-        return jwt()
-                .jwt(builder -> builder
-                        .issuer("http://localhost:8080/realms/test")
-                        .subject("kc-customer"))
-                .authorities(new SimpleGrantedAuthority("ROLE_CUSTOMER"));
-    }
-
-    private static RequestPostProcessor admin() {
-        return jwt()
-                .jwt(builder -> builder
-                        .issuer("http://localhost:8080/realms/test")
-                        .subject("kc-admin"))
-                .authorities(new SimpleGrantedAuthority("ROLE_ADMIN"));
-    }
 }

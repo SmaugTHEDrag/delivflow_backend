@@ -10,5 +10,8 @@ public record UserInfoDto(
         String username,
         String email,
         Boolean emailVerified,
-        String name
+        String name,
+        String firstName,
+        String lastName,
+        String avatarUrl
 ) {}

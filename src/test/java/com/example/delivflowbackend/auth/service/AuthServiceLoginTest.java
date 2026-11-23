@@ -21,7 +21,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.oauth2.jwt.Jwt;
 
 import java.util.Optional;
 import java.util.List;
@@ -29,6 +28,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -50,6 +50,8 @@ class AuthServiceLoginTest {
     void setUp() {
         authService = new AuthService(keycloakAuthService, userRepository,
                 new RefreshTokenCookieService(true, "Lax"), rateLimiter);
+        lenient().when(rateLimiter.checkLoginRate(anyString(), anyString())).thenReturn(true);
+        lenient().when(rateLimiter.checkVerificationResendRate(anyString(), anyString())).thenReturn(true);
     }
 
     @Test
@@ -163,6 +165,101 @@ class AuthServiceLoginTest {
     }
 
     @Test
+    void resendVerificationUsesTheSameAcknowledgementForEveryAccountState() {
+        User pending = pendingUser();
+        User active = activeUser();
+        active.setEmail("active@example.com");
+        when(userRepository.findByEmail(pending.getEmail())).thenReturn(Optional.of(pending));
+        when(userRepository.findByEmail(active.getEmail())).thenReturn(Optional.of(active));
+        when(userRepository.findByEmail("unknown@example.com")).thenReturn(Optional.empty());
+
+        ResponseEntity<?> pendingResponse = authService.resendVerification(pending.getEmail());
+        ResponseEntity<?> activeResponse = authService.resendVerification(active.getEmail());
+        ResponseEntity<?> unknownResponse = authService.resendVerification("unknown@example.com");
+
+        assertThat(pendingResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(activeResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(unknownResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(((AuthResponse) pendingResponse.getBody()).message())
+                .isEqualTo(((AuthResponse) activeResponse.getBody()).message())
+                .isEqualTo(((AuthResponse) unknownResponse.getBody()).message());
+        verify(keycloakAuthService).sendVerificationEmail(SUBJECT);
+    }
+
+    @Test
+    void resendVerificationThrottleReturnsGenericAcknowledgementWithoutSending() {
+        User pending = pendingUser();
+        when(rateLimiter.checkVerificationResendRate(pending.getEmail(), "unknown")).thenReturn(false);
+
+        ResponseEntity<?> response = authService.resendVerification(pending.getEmail());
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(((AuthResponse) response.getBody()).message())
+                .contains("If the account exists")
+                .contains("may be sent");
+        verifyNoInteractions(userRepository, keycloakAuthService);
+    }
+
+    @Test
+    void resendVerificationKeepsAcknowledgementGenericWhenKeycloakFails() {
+        User pending = pendingUser();
+        when(userRepository.findByEmail(pending.getEmail())).thenReturn(Optional.of(pending));
+        doThrow(new KeycloakIntegrationException("SMTP unavailable"))
+                .when(keycloakAuthService).sendVerificationEmail(SUBJECT);
+
+        ResponseEntity<?> response = authService.resendVerification(pending.getEmail());
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(((AuthResponse) response.getBody()).message())
+                .isEqualTo("If the account exists and requires verification, a verification email may be sent.");
+    }
+
+    @Test
+    void resendVerificationDoesNotSendWhenKeycloakAlreadyVerified() {
+        User pending = pendingUser();
+        when(userRepository.findByEmail(pending.getEmail())).thenReturn(Optional.of(pending));
+        when(keycloakAuthService.isEmailVerifiedInKeycloak(SUBJECT)).thenReturn(true);
+        when(userRepository.findByKeycloakId(SUBJECT)).thenReturn(Optional.of(pending));
+
+        ResponseEntity<?> response = authService.resendVerification(pending.getEmail());
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(pending.getEmailVerified()).isTrue();
+        assertThat(pending.getStatus()).isEqualTo(UserStatus.ACTIVE);
+        verify(userRepository).save(pending);
+        verify(keycloakAuthService, never()).sendVerificationEmail(SUBJECT);
+    }
+
+    @Test
+    void resendVerificationIsGenericWhenKeycloakStateLookupFails() {
+        User pending = pendingUser();
+        when(userRepository.findByEmail(pending.getEmail())).thenReturn(Optional.of(pending));
+        when(keycloakAuthService.isEmailVerifiedInKeycloak(SUBJECT))
+                .thenThrow(new KeycloakIntegrationException("Keycloak unavailable"));
+
+        ResponseEntity<?> response = authService.resendVerification(pending.getEmail());
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(((AuthResponse) response.getBody()).message())
+                .isEqualTo("If the account exists and requires verification, a verification email may be sent.");
+        verify(keycloakAuthService, never()).sendVerificationEmail(SUBJECT);
+    }
+
+    @Test
+    void registrationRetryForPendingUserIsThrottled() {
+        User pending = pendingUser();
+        when(userRepository.findByEmail(pending.getEmail())).thenReturn(Optional.of(pending));
+        when(rateLimiter.checkVerificationResendRate(pending.getEmail(), "unknown")).thenReturn(false);
+
+        ResponseEntity<?> response = authService.register(registerRequest());
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(((AuthResponse) response.getBody()).message())
+                .contains("If the account exists");
+        verify(keycloakAuthService, never()).sendVerificationEmail(any());
+    }
+
+    @Test
     void verificationSyncReactivatesOnceOnlyAfterKeycloakConfirmsIt() {
         User pending = pendingUser();
         when(userRepository.findByKeycloakId(SUBJECT)).thenReturn(Optional.of(pending));
@@ -209,7 +306,7 @@ class AuthServiceLoginTest {
     void pendingUserCannotLogInBeforeKeycloakVerification() {
         User pending = pendingUser();
         when(userRepository.findByEmail(pending.getEmail())).thenReturn(Optional.of(pending));
-        when(rateLimiter.checkLoginRate(pending.getEmail())).thenReturn(true);
+        when(rateLimiter.checkLoginRate(pending.getEmail(), "unknown")).thenReturn(true);
         when(keycloakAuthService.authenticateUserPassword("thainguyen", "StrongPassword123!"))
                 .thenReturn(tokens("access-value", "refresh-value"));
         when(keycloakAuthService.getIdentityFromAccessToken("access-value"))
@@ -217,6 +314,48 @@ class AuthServiceLoginTest {
 
         assertThat(authService.login(new LoginRequest(pending.getEmail(), "StrongPassword123!"))
                 .getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(pending.getStatus()).isEqualTo(UserStatus.PENDING_VERIFICATION);
+        verify(userRepository, never()).save(any(User.class));
+    }
+
+    @Test
+    void pendingUserIsActivatedForLoginOnlyAfterAdminApiConfirmsVerification() {
+        User pending = pendingUser();
+        when(userRepository.findByEmail(pending.getEmail())).thenReturn(Optional.of(pending));
+        when(userRepository.findByKeycloakId(SUBJECT)).thenReturn(Optional.of(pending));
+        when(rateLimiter.checkLoginRate(pending.getEmail(), "unknown")).thenReturn(true);
+        when(keycloakAuthService.authenticateUserPassword("thainguyen", "StrongPassword123!"))
+                .thenReturn(tokens("access-value", "refresh-value"));
+        when(keycloakAuthService.getIdentityFromAccessToken("access-value"))
+                .thenReturn(new KeycloakAuthService.AuthenticatedIdentity(ISSUER, SUBJECT, true));
+        when(keycloakAuthService.isEmailVerifiedInKeycloak(SUBJECT)).thenReturn(true);
+
+        ResponseEntity<?> result = authService.login(
+                new LoginRequest(pending.getEmail(), "StrongPassword123!"));
+
+        assertThat(result.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(pending.getEmailVerified()).isTrue();
+        assertThat(pending.getStatus()).isEqualTo(UserStatus.ACTIVE);
+        verify(keycloakAuthService).isEmailVerifiedInKeycloak(SUBJECT);
+    }
+
+    @Test
+    void adminApiFailureDoesNotActivatePendingUserDuringLogin() {
+        User pending = pendingUser();
+        when(userRepository.findByEmail(pending.getEmail())).thenReturn(Optional.of(pending));
+        when(rateLimiter.checkLoginRate(pending.getEmail(), "unknown")).thenReturn(true);
+        when(keycloakAuthService.authenticateUserPassword("thainguyen", "StrongPassword123!"))
+                .thenReturn(tokens("access-value", "refresh-value"));
+        when(keycloakAuthService.getIdentityFromAccessToken("access-value"))
+                .thenReturn(new KeycloakAuthService.AuthenticatedIdentity(ISSUER, SUBJECT, true));
+        when(keycloakAuthService.isEmailVerifiedInKeycloak(SUBJECT))
+                .thenThrow(new KeycloakIntegrationException("Keycloak unavailable"));
+
+        ResponseEntity<?> result = authService.login(
+                new LoginRequest(pending.getEmail(), "StrongPassword123!"));
+
+        assertThat(result.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(pending.getEmailVerified()).isFalse();
         assertThat(pending.getStatus()).isEqualTo(UserStatus.PENDING_VERIFICATION);
         verify(userRepository, never()).save(any(User.class));
     }
@@ -235,7 +374,7 @@ class AuthServiceLoginTest {
     void successfulLoginReturnsAccessTokenAndSetsSecureRefreshCookie() {
         User user = activeUser();
         when(userRepository.findByEmail(user.getEmail())).thenReturn(Optional.of(user));
-        when(rateLimiter.checkLoginRate(user.getEmail())).thenReturn(true);
+        when(rateLimiter.checkLoginRate(user.getEmail(), "unknown")).thenReturn(true);
         when(keycloakAuthService.authenticateUserPassword("thainguyen", "StrongPassword123!"))
                 .thenReturn(tokens("access-value", "refresh-value"));
         when(keycloakAuthService.getIdentityFromAccessToken("access-value"))
@@ -263,12 +402,24 @@ class AuthServiceLoginTest {
     void invalidLoginReturnsUnauthorized() {
         User user = activeUser();
         when(userRepository.findByEmail(user.getEmail())).thenReturn(Optional.of(user));
-        when(rateLimiter.checkLoginRate(user.getEmail())).thenReturn(true);
+        when(rateLimiter.checkLoginRate(user.getEmail(), "unknown")).thenReturn(true);
         when(keycloakAuthService.authenticateUserPassword("thainguyen", "wrong"))
                 .thenThrow(new BadCredentialsException("bad credentials"));
 
         assertThat(authService.login(new LoginRequest(user.getEmail(), "wrong")).getStatusCode())
                 .isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+
+    @Test
+    void throttledLoginKeepsCredentialFailureMessageGeneric() {
+        when(rateLimiter.checkLoginRate("thai@example.com", "unknown")).thenReturn(false);
+
+        ResponseEntity<?> result = authService.login(
+                new LoginRequest("thai@example.com", "any-password"));
+
+        assertThat(result.getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThat(((AuthResponse) result.getBody()).message()).isEqualTo("Invalid email or password");
+        verifyNoInteractions(userRepository, keycloakAuthService);
     }
 
     @Test
@@ -305,29 +456,6 @@ class AuthServiceLoginTest {
                 .contains("Max-Age=0", "HttpOnly", "Secure")
                 .contains("DELIVFLOW_REFRESH=");
         verify(keycloakAuthService).logoutUser("current-refresh");
-    }
-
-    @Test
-    void meUsesAuthenticatedJwtSubjectToLoadLocalProfile() {
-        User user = activeUser();
-        Jwt jwt = Jwt.withTokenValue("signed-token")
-                .header("alg", "RS256")
-                .issuer(ISSUER)
-                .subject(SUBJECT)
-                .claim("email_verified", true)
-                .build();
-        when(userRepository.findByKeycloakId(SUBJECT)).thenReturn(Optional.of(user));
-        var authentication = new org.springframework.security.oauth2.server.resource.authentication
-                .JwtAuthenticationToken(jwt);
-
-        ResponseEntity<?> result = authService.me(authentication);
-
-        assertThat(result.getStatusCode()).isEqualTo(HttpStatus.OK);
-        AuthResponse response = (AuthResponse) result.getBody();
-        assertThat(response.data().getKeycloakId()).isEqualTo(SUBJECT);
-        assertThat(response.data().getEmail()).isEqualTo("thai@example.com");
-        assertThat(response.data().getUsername()).isEqualTo("thainguyen");
-        verify(userRepository).findByKeycloakId(SUBJECT);
     }
 
     private RegisterRequest registerRequest() {

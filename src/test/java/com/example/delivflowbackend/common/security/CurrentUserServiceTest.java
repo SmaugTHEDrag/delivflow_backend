@@ -47,11 +47,26 @@ class CurrentUserServiceTest {
     }
 
     @Test
-    void rejectsJwtWithNoLinkedLocalProfile() {
+    void createsLocalProfileWhenNoneExistsForVerifiedJwt() {
+        when(userRepository.findByKeycloakId("unknown")).thenReturn(Optional.empty());
+        when(userRepository.findByEmail("unknown@example.com")).thenReturn(Optional.empty());
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        User result = currentUserService.requireLocalUser(token("unknown", true));
+
+        assertThat(result.getKeycloakId()).isEqualTo("unknown");
+        assertThat(result.getEmailVerified()).isTrue();
+        assertThat(result.getStatus()).isEqualTo(UserStatus.ACTIVE);
+        verify(userRepository).save(any(User.class));
+    }
+
+    @Test
+    void rejectsJwtWithNoLinkedLocalProfileWhenEmailUnverified() {
         when(userRepository.findByKeycloakId("unknown")).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> currentUserService.requireLocalUser(token("unknown", true)))
-                .isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> currentUserService.requireLocalUser(token("unknown", false)))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessageContaining("An active, verified account is required");
     }
 
     @Test
@@ -88,9 +103,42 @@ class CurrentUserServiceTest {
     }
 
     @Test
+    void updateCurrentUserProfileChangesOnlyEditableFieldsOfAuthenticatedUser() {
+        Jwt jwt = token("subject-from-token", true);
+        User user = activeUser("subject-from-token");
+        user.setFirstName("Current");
+        user.setLastName("User");
+        user.setAvatarUrl("old-avatar");
+        SecurityContextHolder.getContext().setAuthentication(
+                new JwtAuthenticationToken(jwt, List.of(), "different-principal-name"));
+        when(userRepository.findByKeycloakId("subject-from-token")).thenReturn(Optional.of(user));
+        when(userRepository.save(user)).thenReturn(user);
+
+        User updated = currentUserService.updateCurrentUserProfile("  New name  ", null, "new-avatar");
+
+        assertThat(updated).isSameAs(user);
+        assertThat(user.getFirstName()).isEqualTo("New name");
+        assertThat(user.getLastName()).isEqualTo("User");
+        assertThat(user.getAvatarUrl()).isEqualTo("new-avatar");
+        assertThat(user.getKeycloakId()).isEqualTo("subject-from-token");
+        assertThat(user.getUsername()).isEqualTo("user");
+        assertThat(user.getEmail()).isEqualTo("user@example.com");
+        verify(userRepository).findByKeycloakId("subject-from-token");
+        verify(userRepository).save(user);
+        verify(userRepository, never()).findById(any());
+    }
+
+    @Test
     void missingAuthenticationIsRejected() {
         assertThatThrownBy(() -> currentUserService.getCurrentUser())
                 .isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test
+    void updateCurrentUserProfileRequiresAuthentication() {
+        assertThatThrownBy(() -> currentUserService.updateCurrentUserProfile("Name", null, null))
+                .isInstanceOf(AccessDeniedException.class);
+        verifyNoInteractions(userRepository);
     }
 
     private Jwt token(String subject, boolean emailVerified) {
@@ -98,6 +146,7 @@ class CurrentUserServiceTest {
                 .header("alg", "RS256")
                 .issuer("http://localhost:8180/realms/delivflow")
                 .subject(subject)
+                .claim("email", subject + "@example.com")
                 .claim("email_verified", emailVerified)
                 .build();
     }

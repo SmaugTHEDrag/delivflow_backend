@@ -20,9 +20,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -37,6 +35,9 @@ import java.util.regex.Pattern;
 @RequiredArgsConstructor
 public class AuthService {
 
+    private static final String UNKNOWN_CLIENT_ADDRESS = "unknown";
+    private static final String VERIFICATION_RESEND_ACKNOWLEDGEMENT =
+            "If the account exists and requires verification, a verification email may be sent.";
     private static final Pattern PASSWORD_PATTERN =
             Pattern.compile("^(?=.{8,128}$)(?=.*[A-Z])(?=.*[a-z])(?=.*[0-9]).*$");
 
@@ -62,6 +63,10 @@ public class AuthService {
     }
 
     public ResponseEntity<?> register(RegisterRequest request) {
+        return register(request, UNKNOWN_CLIENT_ADDRESS);
+    }
+
+    public ResponseEntity<?> register(RegisterRequest request, String remoteAddress) {
         if (request == null || request.getEmail() == null || request.getEmail().isBlank()
                 || request.getUsername() == null || request.getUsername().isBlank()
                 || request.getFirstName() == null || request.getFirstName().isBlank()
@@ -75,7 +80,8 @@ public class AuthService {
         String email = EmailUtils.normalizeEmail(request.getEmail());
         if (!PASSWORD_PATTERN.matcher(request.getPassword() == null ? "" : request.getPassword()).matches()
                 || username.length() < 3 || username.length() > 100
-                || firstName.length() > 160 || lastName.length() > 160 || email == null) {
+                || firstName.length() > 160 || lastName.length() > 160
+                || email == null || email.length() > 320) {
             return ResponseEntity.badRequest()
                     .body(AuthResponse.failure("Registration details or password do not meet the requirements"));
         }
@@ -86,7 +92,14 @@ public class AuthService {
                     && !Boolean.TRUE.equals(existing.getEmailVerified())
                     && existing.getKeycloakId() != null
                     && existing.getUsername().equalsIgnoreCase(username)) {
-                return sendVerificationEmail(existing);
+                if (!rateLimiter.checkVerificationResendRate(email, remoteAddress)) {
+                    return verificationResendAcknowledgement();
+                }
+                if (!canSendVerificationEmail(existing)) {
+                    return verificationResendAcknowledgement();
+                }
+                sendVerificationEmail(existing);
+                return verificationResendAcknowledgement();
             }
             return ResponseEntity.status(HttpStatus.CONFLICT)
                     .body(AuthResponse.failure("The username or email is already in use"));
@@ -139,17 +152,42 @@ public class AuthService {
     }
 
     public ResponseEntity<?> resendVerification(String email) {
+        return resendVerification(email, UNKNOWN_CLIENT_ADDRESS);
+    }
+
+    public ResponseEntity<?> resendVerification(String email, String remoteAddress) {
         String normalizedEmail = EmailUtils.normalizeEmail(email);
-        if (normalizedEmail == null || normalizedEmail.isBlank()) {
-            return ResponseEntity.badRequest().body(AuthResponse.failure("A valid email address is required"));
+        if (normalizedEmail == null || normalizedEmail.isBlank()
+                || normalizedEmail.length() > 320
+                || !rateLimiter.checkVerificationResendRate(normalizedEmail, remoteAddress)) {
+            return verificationResendAcknowledgement();
         }
         User user = userRepository.findByEmail(normalizedEmail).orElse(null);
         if (user == null || user.getStatus() != UserStatus.PENDING_VERIFICATION
                 || Boolean.TRUE.equals(user.getEmailVerified()) || user.getKeycloakId() == null) {
-            return ResponseEntity.ok(AuthResponse.success(
-                    "If the account is awaiting verification, an email will be sent.", null));
+            return verificationResendAcknowledgement();
         }
-        return sendVerificationEmail(user);
+        if (canSendVerificationEmail(user)) {
+            sendVerificationEmail(user);
+        }
+        return verificationResendAcknowledgement();
+    }
+
+    private boolean canSendVerificationEmail(User user) {
+        try {
+            if (keycloakAuthService.isEmailVerifiedInKeycloak(user.getKeycloakId())) {
+                synchronizeEmailVerification(user.getKeycloakId(), true);
+                return false;
+            }
+            return true;
+        } catch (KeycloakIntegrationException ex) {
+            log.warn("Could not verify current Keycloak email state for user {}", user.getKeycloakId());
+            return false;
+        }
+    }
+
+    private ResponseEntity<?> verificationResendAcknowledgement() {
+        return ResponseEntity.ok(AuthResponse.success(VERIFICATION_RESEND_ACKNOWLEDGEMENT, null));
     }
 
     private ResponseEntity<?> sendVerificationEmail(User user) {
@@ -167,10 +205,15 @@ public class AuthService {
 
     @Transactional
     public boolean synchronizeEmailVerification(String keycloakId) {
+        return synchronizeEmailVerification(
+                keycloakId, keycloakAuthService.isEmailVerifiedInKeycloak(keycloakId));
+    }
+
+    private boolean synchronizeEmailVerification(String keycloakId, boolean keycloakVerified) {
         User user = userRepository.findByKeycloakId(keycloakId)
                 .orElseThrow(() -> new com.example.delivflowbackend.common.exception.UserNotFoundException(
                         "No local profile exists for this identity"));
-        if (!keycloakAuthService.isEmailVerifiedInKeycloak(keycloakId)) {
+        if (!keycloakVerified) {
             return false;
         }
 
@@ -207,14 +250,19 @@ public class AuthService {
 
     @Transactional
     public ResponseEntity<?> login(LoginRequest request) {
+        return login(request, UNKNOWN_CLIENT_ADDRESS);
+    }
+
+    @Transactional
+    public ResponseEntity<?> login(LoginRequest request, String remoteAddress) {
         if (request == null || request.email() == null || request.password() == null) {
             return unauthorized("Invalid email or password");
         }
         String email = EmailUtils.normalizeEmail(request.email());
-        if (email == null || email.isBlank()) {
+        if (email == null || email.isBlank() || email.length() > 320) {
             return unauthorized("Invalid email or password");
         }
-        if (!rateLimiter.checkLoginRate(email)) {
+        if (!rateLimiter.checkLoginRate(email, remoteAddress)) {
             return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
                     .body(AuthResponse.failure("Invalid email or password"));
         }
@@ -237,11 +285,18 @@ public class AuthService {
                 return unauthorized("Invalid email or password");
             }
 
-            user.setEmailVerified(true);
-            user.setStatus(UserStatus.ACTIVE);
+            if (user.getStatus() == UserStatus.PENDING_VERIFICATION
+                    || !Boolean.TRUE.equals(user.getEmailVerified())) {
+                if (!synchronizeEmailVerification(user.getKeycloakId())) {
+                    return unauthorized("Invalid email or password");
+                }
+            }
+            if (user.getStatus() != UserStatus.ACTIVE || !Boolean.TRUE.equals(user.getEmailVerified())) {
+                return unauthorized("Invalid email or password");
+            }
             user.setLastLoginAt(Instant.now());
             userRepository.save(user);
-            rateLimiter.resetLoginRate(email);
+            rateLimiter.resetLoginRate(email, remoteAddress);
             return ResponseEntity.ok()
                     .header(HttpHeaders.SET_COOKIE, refreshTokenCookieService.issue(
                             tokens.refreshToken(), tokens.refreshExpiresIn()).toString())
@@ -254,18 +309,6 @@ public class AuthService {
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                     .body(AuthResponse.failure("Authentication is temporarily unavailable"));
         }
-    }
-
-    public ResponseEntity<?> me(Authentication authentication) {
-        if (authentication != null && authentication.getPrincipal() instanceof Jwt jwt
-                && jwt.getSubject() != null) {
-            User user = userRepository.findByKeycloakId(jwt.getSubject()).orElse(null);
-            if (user != null && user.getStatus() == UserStatus.ACTIVE
-                    && Boolean.TRUE.equals(user.getEmailVerified())) {
-                return ResponseEntity.ok(AuthResponse.success("Authenticated user", toUserResponse(user)));
-            }
-        }
-        return unauthorized("Invalid or expired access token");
     }
 
     public ResponseEntity<?> refresh(String refreshToken) {

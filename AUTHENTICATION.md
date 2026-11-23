@@ -55,6 +55,14 @@ passwords or tokens.
    access token. A Keycloak service outage returns an error rather than claiming
    that revocation succeeded, but the cookie is still cleared.
 
+## User profile
+
+Use the authenticated user's `GET /api/me` endpoint to read the local profile.
+Update editable profile fields with `PATCH /api/me`, sending any subset of
+`firstName`, `lastName`, and `avatarUrl`. Omitted fields remain unchanged.
+Username, email, password, and email verification are managed by Keycloak and
+cannot be changed through this profile endpoint.
+
 ## CSRF, cookies, and CORS
 
 Refresh and logout are cookie-authenticated and require CSRF protection. First
@@ -74,6 +82,21 @@ and on an eligible `401` attempt one refresh with credentials and the CSRF
 header before retrying the original request once. Do not persist the refresh
 token or attempt to read it from JavaScript.
 
+## Login throttling
+
+Login requests are throttled per client IP (30 attempts per 15 minutes) and per
+IP/email pair (5 attempts per 30 minutes). A successful login clears only the
+pair-specific counter; it does not clear the client-IP counter. The backend
+uses the servlet connection's remote address and does not trust a
+client-supplied forwarding header.
+
+The limiter is in-memory, instance-local, and bounded to 10,000 active keys;
+expired entries are cleaned periodically. When the store is full, requests
+that need new tracking keys are throttled until expired entries are cleaned;
+active counters are not evicted. It is not a distributed limiter. Configure
+trusted-proxy address forwarding and edge-level rate limiting in multi-instance
+deployments.
+
 ## JWT validation and Keycloak setup
 
 Spring Security validates the JWT signature using Keycloak's JWKS, issuer, and
@@ -81,6 +104,8 @@ expiration. Set `KEYCLOAK_EXPECTED_AUDIENCES` to a comma-separated audience
 allowlist when the realm/client is configured to issue an API audience; when
 set, tokens without a matching audience are rejected. Realm roles map to
 `ROLE_*` authorities and existing method-level authorization remains enforced.
+The default allowlist is `delivflow-backend`; configure it explicitly when the
+API uses a different Keycloak audience.
 The JWT subject must match the local `keycloakId`, and the account must be
 active and verified.
 
@@ -92,6 +117,18 @@ The client secret stays on the backend and must never be exposed to React.
 
 This repository contains the backend only; React integration is described above
 but no frontend source is present to modify.
+
+## Google social login
+
+Google authentication is implemented only as a Keycloak identity provider. The
+frontend redirects to Keycloak, Keycloak authenticates and links the Google
+identity, and the frontend sends the resulting Keycloak access token to Spring
+Boot. Spring Boot never receives or validates Google access tokens.
+
+Configure a Google identity provider in the same Keycloak realm, exact HTTPS
+callback/redirect URIs, and email as a required claim. Account linking must
+require an existing Keycloak account or an explicitly approved first-broker
+flow; DelivFlow does not merge users solely by matching email.
 
 ## Profile migration
 
