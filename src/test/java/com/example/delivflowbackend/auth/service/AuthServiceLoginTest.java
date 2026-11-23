@@ -21,7 +21,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.oauth2.jwt.Jwt;
 
 import java.util.Optional;
 import java.util.List;
@@ -104,6 +103,7 @@ class AuthServiceLoginTest {
     void registrationRetryForPendingUserResendsWithoutCreatingAnotherUser() {
         User pending = pendingUser();
         when(userRepository.findByEmail(pending.getEmail())).thenReturn(Optional.of(pending));
+        when(rateLimiter.checkVerificationResendRate(pending.getEmail(), "unknown")).thenReturn(true);
 
         ResponseEntity<?> result = authService.register(registerRequest());
 
@@ -153,6 +153,7 @@ class AuthServiceLoginTest {
     void resendVerificationIsSafeToRepeat() {
         User pending = pendingUser();
         when(userRepository.findByEmail(pending.getEmail())).thenReturn(Optional.of(pending));
+        when(rateLimiter.checkVerificationResendRate(pending.getEmail(), "unknown")).thenReturn(true);
 
         assertThat(authService.resendVerification(pending.getEmail()).getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(authService.resendVerification(pending.getEmail()).getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -209,7 +210,7 @@ class AuthServiceLoginTest {
     void pendingUserCannotLogInBeforeKeycloakVerification() {
         User pending = pendingUser();
         when(userRepository.findByEmail(pending.getEmail())).thenReturn(Optional.of(pending));
-        when(rateLimiter.checkLoginRate(pending.getEmail())).thenReturn(true);
+        when(rateLimiter.checkLoginRate(pending.getEmail(), "unknown")).thenReturn(true);
         when(keycloakAuthService.authenticateUserPassword("thainguyen", "StrongPassword123!"))
                 .thenReturn(tokens("access-value", "refresh-value"));
         when(keycloakAuthService.getIdentityFromAccessToken("access-value"))
@@ -226,7 +227,7 @@ class AuthServiceLoginTest {
         User pending = pendingUser();
         when(userRepository.findByEmail(pending.getEmail())).thenReturn(Optional.of(pending));
         when(userRepository.findByKeycloakId(SUBJECT)).thenReturn(Optional.of(pending));
-        when(rateLimiter.checkLoginRate(pending.getEmail())).thenReturn(true);
+        when(rateLimiter.checkLoginRate(pending.getEmail(), "unknown")).thenReturn(true);
         when(keycloakAuthService.authenticateUserPassword("thainguyen", "StrongPassword123!"))
                 .thenReturn(tokens("access-value", "refresh-value"));
         when(keycloakAuthService.getIdentityFromAccessToken("access-value"))
@@ -246,8 +247,7 @@ class AuthServiceLoginTest {
     void adminApiFailureDoesNotActivatePendingUserDuringLogin() {
         User pending = pendingUser();
         when(userRepository.findByEmail(pending.getEmail())).thenReturn(Optional.of(pending));
-        when(userRepository.findByKeycloakId(SUBJECT)).thenReturn(Optional.of(pending));
-        when(rateLimiter.checkLoginRate(pending.getEmail())).thenReturn(true);
+        when(rateLimiter.checkLoginRate(pending.getEmail(), "unknown")).thenReturn(true);
         when(keycloakAuthService.authenticateUserPassword("thainguyen", "StrongPassword123!"))
                 .thenReturn(tokens("access-value", "refresh-value"));
         when(keycloakAuthService.getIdentityFromAccessToken("access-value"))
@@ -278,7 +278,7 @@ class AuthServiceLoginTest {
     void successfulLoginReturnsAccessTokenAndSetsSecureRefreshCookie() {
         User user = activeUser();
         when(userRepository.findByEmail(user.getEmail())).thenReturn(Optional.of(user));
-        when(rateLimiter.checkLoginRate(user.getEmail())).thenReturn(true);
+        when(rateLimiter.checkLoginRate(user.getEmail(), "unknown")).thenReturn(true);
         when(keycloakAuthService.authenticateUserPassword("thainguyen", "StrongPassword123!"))
                 .thenReturn(tokens("access-value", "refresh-value"));
         when(keycloakAuthService.getIdentityFromAccessToken("access-value"))
@@ -306,7 +306,7 @@ class AuthServiceLoginTest {
     void invalidLoginReturnsUnauthorized() {
         User user = activeUser();
         when(userRepository.findByEmail(user.getEmail())).thenReturn(Optional.of(user));
-        when(rateLimiter.checkLoginRate(user.getEmail())).thenReturn(true);
+        when(rateLimiter.checkLoginRate(user.getEmail(), "unknown")).thenReturn(true);
         when(keycloakAuthService.authenticateUserPassword("thainguyen", "wrong"))
                 .thenThrow(new BadCredentialsException("bad credentials"));
 
@@ -348,29 +348,6 @@ class AuthServiceLoginTest {
                 .contains("Max-Age=0", "HttpOnly", "Secure")
                 .contains("DELIVFLOW_REFRESH=");
         verify(keycloakAuthService).logoutUser("current-refresh");
-    }
-
-    @Test
-    void meUsesAuthenticatedJwtSubjectToLoadLocalProfile() {
-        User user = activeUser();
-        Jwt jwt = Jwt.withTokenValue("signed-token")
-                .header("alg", "RS256")
-                .issuer(ISSUER)
-                .subject(SUBJECT)
-                .claim("email_verified", true)
-                .build();
-        when(userRepository.findByKeycloakId(SUBJECT)).thenReturn(Optional.of(user));
-        var authentication = new org.springframework.security.oauth2.server.resource.authentication
-                .JwtAuthenticationToken(jwt);
-
-        ResponseEntity<?> result = authService.me(authentication);
-
-        assertThat(result.getStatusCode()).isEqualTo(HttpStatus.OK);
-        AuthResponse response = (AuthResponse) result.getBody();
-        assertThat(response.data().getKeycloakId()).isEqualTo(SUBJECT);
-        assertThat(response.data().getEmail()).isEqualTo("thai@example.com");
-        assertThat(response.data().getUsername()).isEqualTo("thainguyen");
-        verify(userRepository).findByKeycloakId(SUBJECT);
     }
 
     private RegisterRequest registerRequest() {

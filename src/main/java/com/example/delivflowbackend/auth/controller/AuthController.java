@@ -1,15 +1,20 @@
 package com.example.delivflowbackend.auth.controller;
 
 import com.example.delivflowbackend.auth.dto.CsrfTokenResponse;
+import com.example.delivflowbackend.auth.dto.AuthResponse;
 import com.example.delivflowbackend.auth.dto.LoginRequest;
 import com.example.delivflowbackend.auth.dto.RegisterRequest;
+import com.example.delivflowbackend.auth.dto.UserResponse;
 import com.example.delivflowbackend.auth.service.AuthService;
 import com.example.delivflowbackend.auth.service.RefreshTokenCookieService;
+import com.example.delivflowbackend.common.security.CurrentUserService;
+import com.example.delivflowbackend.user.entity.User;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.web.csrf.CsrfToken;
@@ -32,6 +37,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class AuthController {
 
     private final AuthService authService;
+    private final CurrentUserService currentUserService;
     private final CookieCsrfTokenRepository csrfTokenRepository;
 
     @Operation(summary = "Register a new customer account")
@@ -89,7 +95,25 @@ public class AuthController {
     @SecurityRequirement(name = "bearerAuth")
     @GetMapping("/me")
     public ResponseEntity<?> me(Authentication authentication) {
-        return authService.me(authentication);
+        if (authentication == null || !(authentication.getPrincipal() instanceof Jwt jwt)) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(AuthResponse.failure("A valid Keycloak access token is required"));
+        }
+        User user = currentUserService.requireLocalUser(jwt);
+        UserResponse response = UserResponse.builder()
+                .id(user.getId() == null ? null : user.getId().toString())
+                .keycloakId(user.getKeycloakId())
+                .username(user.getUsername())
+                .email(user.getEmail())
+                .fullName(java.util.stream.Stream.of(user.getFirstName(), user.getLastName())
+                        .filter(java.util.Objects::nonNull)
+                        .collect(java.util.stream.Collectors.joining(" ")))
+                .firstName(user.getFirstName())
+                .lastName(user.getLastName())
+                .emailVerified(Boolean.TRUE.equals(user.getEmailVerified()))
+                .status(user.getStatus())
+                .build();
+        return ResponseEntity.ok(AuthResponse.success("Current user profile retrieved", response));
     }
 
     @Operation(summary = "Revoke the refresh token and clear its cookie")

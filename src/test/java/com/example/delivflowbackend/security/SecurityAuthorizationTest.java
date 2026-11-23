@@ -17,6 +17,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.oauth2.jwt.BadJwtException;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.ActiveProfiles;
@@ -177,15 +178,39 @@ class SecurityAuthorizationTest {
                         .with(jwt().jwt(token -> token.subject("current-subject")))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"firstName\":\"Updated\",\"lastName\":\"Name\","
-                                + "\"avatarUrl\":\"https://example.com/avatar.png\","
-                                + "\"username\":\"changed-user\",\"email\":\"changed@example.com\"}"))
+                                + "\"avatarUrl\":\"https://example.com/avatar.png\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.username").value("original-user"))
                 .andExpect(jsonPath("$.email").value("original@example.com"))
                 .andExpect(jsonPath("$.firstName").value("Updated"))
                 .andExpect(jsonPath("$.lastName").value("Name"));
+
+        mockMvc.perform(patch("/api/me")
+                        .with(jwt().jwt(token -> token.subject("current-subject")))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"changed-user\",\"email\":\"changed@example.com\"}"))
+                .andExpect(status().isBadRequest());
         org.mockito.Mockito.verify(currentUserService).updateCurrentUserProfile(
                 "Updated", "Name", "https://example.com/avatar.png");
+    }
+
+    @Test
+    void deprecatedAuthMeRouteDelegatesProfileLookupToCurrentUserService() throws Exception {
+        User user = new User();
+        user.setKeycloakId("current-subject");
+        user.setUsername("original-user");
+        user.setEmail("original@example.com");
+        user.setEmailVerified(true);
+        user.setFirstName("Current");
+        user.setLastName("User");
+        when(currentUserService.requireLocalUser(any(Jwt.class))).thenReturn(user);
+
+        mockMvc.perform(get("/api/auth/me")
+                        .with(jwt().jwt(token -> token.subject("current-subject")
+                                .claim("email_verified", true))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.keycloakId").value("current-subject"))
+                .andExpect(jsonPath("$.data.email").value("original@example.com"));
     }
 
     @Test
