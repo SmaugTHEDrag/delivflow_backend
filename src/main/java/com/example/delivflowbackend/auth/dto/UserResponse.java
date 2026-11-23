@@ -5,7 +5,7 @@ import lombok.Builder;
 import lombok.Data;
 
 /**
- * Response returned by GET /api/auth/me.
+ * User profile included in the successful login response.
  */
 @Data
 @Builder

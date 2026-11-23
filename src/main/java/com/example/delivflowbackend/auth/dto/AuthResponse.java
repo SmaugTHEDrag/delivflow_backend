@@ -1,7 +1,7 @@
 package com.example.delivflowbackend.auth.dto;
 
 /**
- * Response returned by auth endpoints (register, login, me).
+ * Response returned by auth endpoints (register, login, and verification actions).
  */
 public record AuthResponse(
         boolean success,

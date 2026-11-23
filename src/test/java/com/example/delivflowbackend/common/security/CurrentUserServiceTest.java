@@ -47,11 +47,26 @@ class CurrentUserServiceTest {
     }
 
     @Test
-    void rejectsJwtWithNoLinkedLocalProfile() {
+    void createsLocalProfileWhenNoneExistsForVerifiedJwt() {
+        when(userRepository.findByKeycloakId("unknown")).thenReturn(Optional.empty());
+        when(userRepository.findByEmail("unknown@example.com")).thenReturn(Optional.empty());
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        User result = currentUserService.requireLocalUser(token("unknown", true));
+
+        assertThat(result.getKeycloakId()).isEqualTo("unknown");
+        assertThat(result.getEmailVerified()).isTrue();
+        assertThat(result.getStatus()).isEqualTo(UserStatus.ACTIVE);
+        verify(userRepository).save(any(User.class));
+    }
+
+    @Test
+    void rejectsJwtWithNoLinkedLocalProfileWhenEmailUnverified() {
         when(userRepository.findByKeycloakId("unknown")).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> currentUserService.requireLocalUser(token("unknown", true)))
-                .isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> currentUserService.requireLocalUser(token("unknown", false)))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessageContaining("An active, verified account is required");
     }
 
     @Test
@@ -131,6 +146,7 @@ class CurrentUserServiceTest {
                 .header("alg", "RS256")
                 .issuer("http://localhost:8180/realms/delivflow")
                 .subject(subject)
+                .claim("email", subject + "@example.com")
                 .claim("email_verified", emailVerified)
                 .build();
     }

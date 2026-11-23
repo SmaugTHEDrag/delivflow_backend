@@ -46,7 +46,7 @@ app:
       same-site: ${AUTH_REFRESH_COOKIE_SAME_SITE:Lax}
   security:
     jwt:
-      audiences: ${KEYCLOAK_EXPECTED_AUDIENCES:}
+      audiences: ${KEYCLOAK_EXPECTED_AUDIENCES:delivflow-backend}
   cors:
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173,http://localhost:5174}
 
