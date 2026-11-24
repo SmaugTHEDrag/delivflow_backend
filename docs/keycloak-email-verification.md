@@ -8,9 +8,10 @@ DelivFlow delegates verification email delivery and action-token creation to Key
 2. **Realm Settings → Login:** enable **Verify email** so Keycloak enforces verification as part of the account flow.
 3. **Clients → delivflow-backend → Credentials:** enable the confidential service-account client and set its secret as `KEYCLOAK_BACKEND_CLIENT_SECRET`.
 4. **Clients → delivflow-backend → Service account roles:** assign the `realm-management` client roles `manage-users` and `view-users`. The backend uses these roles to create/delete users and re-fetch their verification state.
-5. **Clients → the configured email-verification client → Settings:** allow the exact redirect URI in `KEYCLOAK_EMAIL_VERIFICATION_REDIRECT_URI` (and the corresponding web origin where required). Do not use a wildcard redirect in production.
-6. **Realm Settings → Themes → Email Theme:** select `delivflow`.
-7. Configure an action-token lifetime appropriate for your security policy. The backend supplies `KEYCLOAK_EMAIL_VERIFICATION_LIFESPAN_SECONDS` on each action-email request.
+5. **Clients → delivflow-backend → Client scopes → dedicated scope → Add mapper → By configuration → Audience:** add an access-token mapper with **Included Client Audience** set to `delivflow-backend`, **Add to access token** enabled, and **Add to ID token** disabled. The API requires this audience; do not disable its audience validation to work around missing token configuration.
+6. **Clients → the configured email-verification client → Settings:** allow the exact redirect URI in `KEYCLOAK_EMAIL_VERIFICATION_REDIRECT_URI` (and the corresponding web origin where required). Do not use a wildcard redirect in production.
+7. **Realm Settings → Themes → Email Theme:** select `delivflow`.
+8. Configure an action-token lifetime appropriate for your security policy. The backend supplies `KEYCLOAK_EMAIL_VERIFICATION_LIFESPAN_SECONDS` on each action-email request.
 
 The backend sends `PUT /admin/realms/{realm}/users/{id}/execute-actions-email` with the JSON body `["VERIFY_EMAIL"]`, plus `client_id`, `redirect_uri`, and `lifespan` query parameters.
 

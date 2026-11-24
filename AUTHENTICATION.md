@@ -113,6 +113,11 @@ Configure `KEYCLOAK_ISSUER_URI`, `KEYCLOAK_BASE_URL`, `KEYCLOAK_REALM`,
 `KEYCLOAK_BACKEND_CLIENT_ID`, and `KEYCLOAK_BACKEND_CLIENT_SECRET`. The
 confidential backend client needs service-account permissions for user
 management and Direct Access Grants enabled for this password-login contract.
+Add an Audience protocol mapper to that client (or its dedicated client scope)
+that includes `delivflow-backend` in access tokens and not ID tokens. Keycloak
+otherwise issues password-grant access tokens with only the `account` audience,
+which the API correctly rejects. Keep audience validation enabled; the exact
+Admin Console setup is in [the Keycloak email verification guide](./docs/keycloak-email-verification.md).
 The client secret stays on the backend and must never be exposed to React.
 
 This repository contains the backend only; React integration is described above

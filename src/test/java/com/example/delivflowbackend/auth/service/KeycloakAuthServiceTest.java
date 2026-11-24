@@ -14,6 +14,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.JwtException;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.test.web.client.RequestMatcher;
 import org.springframework.test.web.client.response.MockRestResponseCreators;
@@ -274,7 +275,9 @@ class KeycloakAuthServiceTest {
         assertThat(output.getAll())
                 .contains("status=400")
                 .contains("error=invalid_grant")
-                .contains("description=Invalid user credentials");
+                .contains("category=oauth_rejected")
+                .contains("realm=delivflow")
+                .doesNotContain("Invalid user credentials");
         server.verify();
     }
 
@@ -296,7 +299,8 @@ class KeycloakAuthServiceTest {
         assertThat(output.getAll())
                 .contains("status=401")
                 .contains("error=invalid_client")
-                .contains("Client authentication failed")
+                .contains("realm=delivflow")
+                .doesNotContain("Client authentication failed")
                 .doesNotContain("Invalid email or password");
         server.verify();
     }
@@ -318,10 +322,31 @@ class KeycloakAuthServiceTest {
                 .hasMessageContaining("outstanding required actions");
         assertThat(output.getAll())
                 .contains("error=invalid_grant")
-                .contains("not fully set up")
+                .contains("category=oauth_rejected")
                 .doesNotContain("secret-value")
                 .doesNotContain("alice@example.com");
         server.verify();
+    }
+
+    @Test
+    void accessTokenValidationFailureLogsOnlySafeCategoryAndRealm(CapturedOutput output) {
+        KeycloakProperties properties = new KeycloakProperties(
+                BASE_URL, REALM, ISSUER, "backend-client", "client-secret", true,
+                "frontend-client", "http://localhost:3000/login", 86400);
+        KeycloakAuthService service = new KeycloakAuthService(
+                properties,
+                token -> {
+                    throw new JwtException("sensitive validation detail");
+                },
+                RestClient.builder().build());
+
+        assertThatThrownBy(() -> service.getIdentityFromAccessToken("secret-access-token"))
+                .isInstanceOf(BadCredentialsException.class);
+        assertThat(output.getAll())
+                .contains("category=jwt_validation_failed")
+                .contains("realm=delivflow")
+                .doesNotContain("sensitive validation detail")
+                .doesNotContain("secret-access-token");
     }
 
     private KeycloakAuthService service(RestClient restClient) {

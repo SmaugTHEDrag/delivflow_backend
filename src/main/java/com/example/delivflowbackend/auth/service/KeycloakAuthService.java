@@ -203,8 +203,8 @@ public class KeycloakAuthService {
         } catch (RestClientResponseException ex) {
             KeycloakErrorResponse error = parseKeycloakError(ex);
             String description = sanitizeErrorDescription(error.description(), username);
-            log.warn("Keycloak password grant rejected: status={} error={} description={}",
-                    ex.getStatusCode().value(), error.error(), description);
+            log.warn("Keycloak password grant rejected: category=oauth_rejected status={} error={} realm={}",
+                    ex.getStatusCode().value(), safeOAuthErrorCode(error.error()), properties.getRealm());
 
             if (ex.getStatusCode().is4xxClientError()) {
                 if ("invalid_grant".equals(error.error())) {
@@ -225,7 +225,7 @@ public class KeycloakAuthService {
                     }
                 }
                 throw new KeycloakIntegrationException(
-                        "Keycloak rejected the password grant (error=" + error.error() + ")");
+                        "Keycloak rejected the password grant (error=" + safeOAuthErrorCode(error.error()) + ")");
             }
             throw new KeycloakIntegrationException("Authentication is temporarily unavailable");
         } catch (RuntimeException ex) {
@@ -260,10 +260,12 @@ public class KeycloakAuthService {
         } catch (RestClientResponseException ex) {
             KeycloakErrorResponse error = parseKeycloakError(ex);
             if (ex.getStatusCode().is4xxClientError() && "invalid_grant".equals(error.error())) {
+                log.warn("Keycloak refresh grant rejected: category=oauth_rejected status={} error={} realm={}",
+                        ex.getStatusCode().value(), safeOAuthErrorCode(error.error()), properties.getRealm());
                 throw new BadCredentialsException("Invalid or expired refresh token");
             }
-            log.warn("Keycloak token refresh failed with status {} and error={}",
-                    ex.getStatusCode().value(), error.error());
+            log.warn("Keycloak token refresh failed: category=oauth_rejected status={} error={} realm={}",
+                    ex.getStatusCode().value(), safeOAuthErrorCode(error.error()), properties.getRealm());
             throw new KeycloakIntegrationException("Authentication is temporarily unavailable");
         } catch (BadCredentialsException | KeycloakIntegrationException ex) {
             throw ex;
@@ -336,6 +338,10 @@ public class KeycloakAuthService {
         return node == null || node.isNull() ? "not provided" : node.asString();
     }
 
+    private String safeOAuthErrorCode(String error) {
+        return error != null && error.matches("[A-Za-z0-9._-]{1,64}") ? error : "unknown";
+    }
+
     private record KeycloakErrorResponse(String error, String description) {
     }
 
@@ -357,6 +363,8 @@ public class KeycloakAuthService {
             }
             return new AuthenticatedIdentity(issuer, subject, jwt.getClaimAsBoolean("email_verified"));
         } catch (JwtException | IllegalArgumentException ex) {
+            log.warn("Keycloak access-token validation failed: category=jwt_validation_failed realm={}",
+                    properties.getRealm());
             throw new BadCredentialsException("Invalid email or password");
         }
     }
