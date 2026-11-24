@@ -7,6 +7,7 @@ import com.example.delivflowbackend.auth.dto.LoginRequest;
 import com.example.delivflowbackend.auth.dto.UserResponse;
 import com.example.delivflowbackend.auth.service.AuthService;
 import com.example.delivflowbackend.common.security.CurrentUserService;
+import com.example.delivflowbackend.common.exception.KeycloakIntegrationException;
 import com.example.delivflowbackend.user.entity.User;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,7 +25,7 @@ import org.springframework.test.context.ActiveProfiles;
 
 
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.*;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -134,6 +135,41 @@ class SecurityAuthorizationTest {
     void verificationSyncRequiresAnAuthenticatedCaller() throws Exception {
         mockMvc.perform(put("/api/auth/email-verification/sync/keycloak-user"))
                 .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void verifiedEmailSyncReturnsNoContent() throws Exception {
+        when(authService.synchronizeEmailVerification("caller-user")).thenReturn(true);
+
+        mockMvc.perform(put("/api/auth/email-verification/sync/caller-user")
+                        .with(jwt().jwt(token -> token.subject("caller-user"))))
+                .andExpect(status().isNoContent());
+
+        verify(authService).synchronizeEmailVerification("caller-user");
+    }
+
+    @Test
+    void unverifiedEmailSyncReturnsAccepted() throws Exception {
+        when(authService.synchronizeEmailVerification("caller-user")).thenReturn(false);
+
+        mockMvc.perform(put("/api/auth/email-verification/sync/caller-user")
+                        .with(jwt().jwt(token -> token.subject("caller-user"))))
+                .andExpect(status().isAccepted());
+    }
+
+    @Test
+    void keycloakSyncOutageReturnsGenericServiceUnavailable() throws Exception {
+        when(authService.synchronizeEmailVerification("caller-user"))
+                .thenThrow(new KeycloakIntegrationException("internal infrastructure details"));
+
+        mockMvc.perform(put("/api/auth/email-verification/sync/caller-user")
+                        .with(jwt().jwt(token -> token.subject("caller-user"))))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.message")
+                        .value("Email verification synchronization is temporarily unavailable"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .content().string(org.hamcrest.Matchers.not(
+                                org.hamcrest.Matchers.containsString("internal infrastructure details"))));
     }
 
         @Test

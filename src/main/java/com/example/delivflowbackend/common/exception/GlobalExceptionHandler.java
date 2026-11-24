@@ -30,6 +30,13 @@ public class GlobalExceptionHandler {
                 .body(Map.of("message", ex.getMessage()));
     }
 
+    @ExceptionHandler(KeycloakIntegrationException.class)
+    public ResponseEntity<?> handleKeycloakIntegrationFailure(KeycloakIntegrationException ex) {
+        return ResponseEntity
+                .status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(Map.of("message", "Email verification synchronization is temporarily unavailable"));
+    }
+
     @ExceptionHandler({IllegalArgumentException.class, IllegalStateException.class})
     public ResponseEntity<?> handleBadRequest(RuntimeException ex) {
         return ResponseEntity

@@ -27,6 +27,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
@@ -192,9 +193,44 @@ class AuthServiceLoginTest {
     }
 
     @Test
+    void verificationSyncLeavesDisabledUserUnchanged() {
+        User disabled = pendingUser();
+        disabled.setStatus(UserStatus.DISABLED);
+        when(userRepository.findByKeycloakId(SUBJECT)).thenReturn(Optional.of(disabled));
+        when(keycloakAuthService.isEmailVerifiedInKeycloak(SUBJECT)).thenReturn(true);
+
+        assertThat(authService.synchronizeEmailVerification(SUBJECT)).isFalse();
+
+        assertThat(disabled.getEmailVerified()).isFalse();
+        assertThat(disabled.getStatus()).isEqualTo(UserStatus.DISABLED);
+        verify(userRepository, never()).save(any(User.class));
+    }
+
+    @Test
+    void verificationSyncCanRetryAfterKeycloakIsTemporarilyUnavailable() {
+        User pending = pendingUser();
+        when(userRepository.findByKeycloakId(SUBJECT)).thenReturn(Optional.of(pending));
+        when(keycloakAuthService.isEmailVerifiedInKeycloak(SUBJECT))
+                .thenThrow(new KeycloakIntegrationException("internal Keycloak failure"))
+                .thenReturn(true);
+
+        assertThatThrownBy(() -> authService.synchronizeEmailVerification(SUBJECT))
+                .isInstanceOf(KeycloakIntegrationException.class);
+        assertThat(pending.getEmailVerified()).isFalse();
+        assertThat(pending.getStatus()).isEqualTo(UserStatus.PENDING_VERIFICATION);
+        verify(userRepository, never()).save(any(User.class));
+
+        assertThat(authService.synchronizeEmailVerification(SUBJECT)).isTrue();
+        assertThat(pending.getEmailVerified()).isTrue();
+        assertThat(pending.getStatus()).isEqualTo(UserStatus.ACTIVE);
+        verify(userRepository).save(pending);
+    }
+
+    @Test
     void reconciliationFindsVerifiedUsersWhenSyncRequestsWereLost() {
         User pending = pendingUser();
-        when(userRepository.findAllByStatusAndEmailVerifiedFalse(UserStatus.PENDING_VERIFICATION))
+        when(userRepository.findAllEligibleForEmailVerificationReconciliation(
+                UserStatus.PENDING_VERIFICATION, UserStatus.ACTIVE))
                 .thenReturn(List.of(pending));
         when(userRepository.findByKeycloakId(SUBJECT)).thenReturn(Optional.of(pending));
         when(keycloakAuthService.isEmailVerifiedInKeycloak(SUBJECT)).thenReturn(true);
@@ -204,6 +240,38 @@ class AuthServiceLoginTest {
         assertThat(pending.getEmailVerified()).isTrue();
         assertThat(pending.getStatus()).isEqualTo(UserStatus.ACTIVE);
         verify(userRepository).save(pending);
+    }
+
+    @Test
+    void reconciliationRepairsActiveUnverifiedAndPendingAlreadyVerifiedProfiles() {
+        User activeUnverified = pendingUser();
+        activeUnverified.setKeycloakId("active-unverified-id");
+        activeUnverified.setEmail("active-unverified@example.com");
+        activeUnverified.setStatus(UserStatus.ACTIVE);
+
+        User pendingVerified = pendingUser();
+        pendingVerified.setKeycloakId("pending-verified-id");
+        pendingVerified.setEmail("pending-verified@example.com");
+        pendingVerified.setEmailVerified(true);
+
+        when(userRepository.findAllEligibleForEmailVerificationReconciliation(
+                UserStatus.PENDING_VERIFICATION, UserStatus.ACTIVE))
+                .thenReturn(List.of(activeUnverified, pendingVerified));
+        when(userRepository.findByKeycloakId("active-unverified-id"))
+                .thenReturn(Optional.of(activeUnverified));
+        when(userRepository.findByKeycloakId("pending-verified-id"))
+                .thenReturn(Optional.of(pendingVerified));
+        when(keycloakAuthService.isEmailVerifiedInKeycloak("active-unverified-id")).thenReturn(true);
+        when(keycloakAuthService.isEmailVerifiedInKeycloak("pending-verified-id")).thenReturn(true);
+
+        authService.reconcilePendingEmailVerifications();
+
+        assertThat(activeUnverified.getEmailVerified()).isTrue();
+        assertThat(activeUnverified.getStatus()).isEqualTo(UserStatus.ACTIVE);
+        assertThat(pendingVerified.getEmailVerified()).isTrue();
+        assertThat(pendingVerified.getStatus()).isEqualTo(UserStatus.ACTIVE);
+        verify(userRepository).save(activeUnverified);
+        verify(userRepository).save(pendingVerified);
     }
 
     @Test

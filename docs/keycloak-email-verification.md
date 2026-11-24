@@ -26,6 +26,8 @@ Authorization: Bearer <valid Keycloak access token>
 
 The path identity must match the subject in the caller's validated Keycloak access token. The backend changes the local profile only when the Admin API reports `emailVerified=true`; repeated syncs are safe. Pending-account login uses the same Admin API check before activating the local profile. A scheduled reconciliation retries pending profiles every five minutes by default, covering missed requests and verification links that have expired. Resending verification uses Keycloak's built-in `VERIFY_EMAIL` action.
 
+The sync endpoint returns `204` after a confirmed synchronization, `202` when Keycloak still reports an unverified email (or the local account is disabled), and a generic `503` if Keycloak's verification state cannot be checked. A failed check leaves PostgreSQL unchanged and can be retried. Reconciliation checks all pending profiles and active profiles whose local verification flag is false; disabled profiles are excluded and are never reactivated by email verification.
+
 No Keycloak Event Listener SPI or custom callback state is required. Keycloak remains responsible for creating and validating verification links; Spring Boot does not send email or issue verification tokens.
 
 ## Backend environment variables

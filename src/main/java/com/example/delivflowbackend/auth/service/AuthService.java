@@ -213,7 +213,7 @@ public class AuthService {
         User user = userRepository.findByKeycloakId(keycloakId)
                 .orElseThrow(() -> new com.example.delivflowbackend.common.exception.UserNotFoundException(
                         "No local profile exists for this identity"));
-        if (!keycloakVerified) {
+        if (!keycloakVerified || user.getStatus() == UserStatus.DISABLED) {
             return false;
         }
 
@@ -236,9 +236,9 @@ public class AuthService {
             fixedDelayString = "${app.keycloak.email-verification.reconciliation-interval-ms:300000}",
             initialDelayString = "${app.keycloak.email-verification.reconciliation-interval-ms:300000}")
     public void reconcilePendingEmailVerifications() {
-        List<User> pendingUsers =
-                userRepository.findAllByStatusAndEmailVerifiedFalse(UserStatus.PENDING_VERIFICATION);
-        for (User user : pendingUsers) {
+        List<User> eligibleUsers = userRepository.findAllEligibleForEmailVerificationReconciliation(
+                UserStatus.PENDING_VERIFICATION, UserStatus.ACTIVE);
+        for (User user : eligibleUsers) {
             try {
                 synchronizeEmailVerification(user.getKeycloakId());
             } catch (KeycloakIntegrationException ex) {
